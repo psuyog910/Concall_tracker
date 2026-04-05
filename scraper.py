@@ -46,7 +46,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 SILENT_MODE = False
 
 # If True, skips PDF/AI steps and only updates the date memory (Seed Mode).
-SEED_ONLY = False
+SEED_ONLY = True
 
 MAX_RETRIES = 3
 RETRY_DELAY = 5  # seconds
