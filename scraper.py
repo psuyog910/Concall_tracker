@@ -42,6 +42,12 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
+# If True, saves summaries but DOES NOT send Telegram alerts.
+SILENT_MODE = False
+
+# If True, skips PDF/AI steps and only updates the date memory (Seed Mode).
+SEED_ONLY = False
+
 MAX_RETRIES = 3
 RETRY_DELAY = 5  # seconds
 
@@ -433,6 +439,12 @@ def process_stock(symbol: str, state: dict) -> bool:
 
     log.info("🆕 NEW concall detected for %s: %s", symbol, latest["date_raw"])
 
+    # --- Quick Seed Mode ---
+    if SEED_ONLY:
+        state[symbol] = current_date
+        log.info("Seed mode: Memory updated for %s \u2192 %s (Skipped AI)", symbol, current_date)
+        return True
+
     # Step 3: Download and extract transcript PDF
     transcript_text = extract_pdf_text(latest["pdf_url"])
     if not transcript_text:
@@ -448,8 +460,11 @@ def process_stock(symbol: str, state: dict) -> bool:
     # Step 5: Save markdown summary
     save_summary(symbol, current_date, latest["date_raw"], summary)
 
-    # Step 6: Send Telegram alert
-    send_telegram(symbol, latest["date_raw"], summary)
+    # Step 6: Send Telegram alert (if not in silent mode)
+    if not SILENT_MODE:
+        send_telegram(symbol, latest["date_raw"], summary)
+    else:
+        log.info("Silent mode is ON: skipping Telegram alert for %s", symbol)
 
     # Step 7: Update state
     state[symbol] = current_date
