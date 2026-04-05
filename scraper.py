@@ -299,7 +299,13 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
     prompt = SUMMARY_PROMPT.format(transcript=transcript_text)
 
     # Try multiple models as fallback (quota is per-model on free tier)
-    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
+    models_to_try = [
+        "gemini-3.1-pro-preview",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.0-flash"
+    ]
 
     for model_name in models_to_try:
         log.info("Trying Gemini model: %s", model_name)
