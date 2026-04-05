@@ -284,6 +284,8 @@ Summarize the following earnings concall transcript into:
 ## Overall Tone (Bullish / Neutral / Bearish)
 
 Keep summary concise and professional.
+Use appropriate emojis for section headers or bullet points (e.g., 🔹, 📈, ⚠️) to make it highly readable.
+Prioritize brevity: use short bullet points instead of long paragraphs.
 
 Transcript:
 {transcript}
@@ -364,29 +366,47 @@ def save_summary(symbol: str, date_iso: str, date_raw: str, summary: str) -> Pat
 # Telegram notification
 # ---------------------------------------------------------------------------
 
+def format_telegram_html(text: str) -> str:
+    """Convert AI markdown summary to Telegram-compatible HTML safely."""
+    # 1. Escape HTML special chars (must do this first!)
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    
+    # 2. Convert headers (## Header) to bold and add a little spacing
+    text = re.sub(r'(?m)^##\s*(.*?)\s*$', r'\n<b>\1</b>', text)
+    text = re.sub(r'(?m)^#\s*(.*?)\s*$', r'\n<b>\1</b>', text)
+    
+    # 3. Convert **bold** to <b>bold</b>
+    text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
+    
+    # 4. Fallback: Convert remaining standard bullet points to a nice unicode bullet
+    text = re.sub(r'(?m)^[-*]\s+', r'▪️ ', text)
+    
+    return text.strip()
+
 def send_telegram(symbol: str, date_raw: str, summary: str) -> bool:
     """Send a Telegram message when a new concall is detected."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         log.warning("Telegram credentials not set – skipping notification")
         return False
 
-    # Truncate summary for Telegram (4096 char limit)
-    short_summary = summary[:3000] if len(summary) > 3000 else summary
+    # Truncate summary for Telegram (4096 char limit minus header/footer)
+    short_summary = summary[:3500] if len(summary) > 3500 else summary
+    html_summary = format_telegram_html(short_summary)
 
     message = (
-        f"🚨 *New Concall Detected*\n\n"
-        f"*Stock:* `{symbol}`\n"
-        f"*Date:* {date_raw}\n\n"
-        f"*AI Summary:*\n\n"
-        f"{short_summary}\n\n"
-        f"🔗 [View on Screener](https://www.screener.in/company/{symbol}/)"
+        f"🚨 <b>NEW CONCALL DETECTED</b>\n\n"
+        f"🏢 <b>Stock:</b> <code>{symbol}</code>\n"
+        f"📅 <b>Date:</b> {date_raw}\n\n"
+        f"🤖 <b>AI Summary:</b>\n"
+        f"<blockquote expandable>{html_summary}</blockquote>\n\n"
+        f"🔗 <a href='https://www.screener.in/company/{symbol}/'>View Full Details on Screener</a>"
     )
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message,
-        "parse_mode": "Markdown",
+        "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
 
