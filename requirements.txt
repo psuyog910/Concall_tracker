@@ -2,4 +2,4 @@ requests
 beautifulsoup4
 google-generativeai
 python-dateutil
-PyPDF2
+pypdf

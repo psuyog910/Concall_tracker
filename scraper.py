@@ -21,9 +21,9 @@ from bs4 import BeautifulSoup
 from dateutil import parser as dateparser
 
 try:
-    import PyPDF2
+    import pypdf
 except ImportError:
-    PyPDF2 = None
+    pypdf = None
 
 import google.generativeai as genai
 
@@ -46,7 +46,9 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 SILENT_MODE = False
 
 # If True, skips PDF/AI steps and only updates the date memory (Seed Mode).
-SEED_ONLY = True
+# Controlled via SEED_ONLY env var — set it in GitHub Actions for the seeding run,
+# then remove it. No code edits needed.
+SEED_ONLY = os.environ.get("SEED_ONLY", "false").lower() == "true"
 
 MAX_RETRIES = 3
 RETRY_DELAY = 5  # seconds
@@ -233,12 +235,12 @@ def extract_pdf_text(pdf_url: str) -> Optional[str]:
         log.error("Failed to download PDF: %s", pdf_url)
         return None
 
-    if PyPDF2 is None:
-        log.error("PyPDF2 not installed – cannot extract PDF text")
+    if pypdf is None:
+        log.error("pypdf not installed – cannot extract PDF text")
         return None
 
     try:
-        reader = PyPDF2.PdfReader(io.BytesIO(resp.content))
+        reader = pypdf.PdfReader(io.BytesIO(resp.content))
         pages_text = []
         for page in reader.pages:
             text = page.extract_text()
@@ -306,11 +308,11 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
 
     # Try multiple models as fallback (quota is per-model on free tier)
     models_to_try = [
-        "gemini-3.1-pro-preview",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.0-flash"
+        "gemini-2.5-pro-exp-03-25",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash",
     ]
 
     for model_name in models_to_try:
