@@ -347,19 +347,21 @@ def save_summary(symbol: str, date_iso: str, date_raw: str, summary: str) -> Pat
 # ---------------------------------------------------------------------------
 
 def format_telegram_html(text: str) -> str:
-    """Convert AI markdown summary to Telegram-compatible HTML safely."""
+    """Convert AI markdown summary to Telegram-compatible HTML safely with better spacing."""
     # 1. Escape HTML special chars (must do this first!)
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     
-    # 2. Convert headers (## Header) to bold and add a little spacing
-    text = re.sub(r'(?m)^##\s*(.*?)\s*$', r'\n<b>\1</b>', text)
-    text = re.sub(r'(?m)^#\s*(.*?)\s*$', r'\n<b>\1</b>', text)
+    # 2. Convert headers (## Header) to bold and add significant spacing
+    text = re.sub(r'(?m)^#{1,3}\s*(.*?)\s*$', r'\n\n<b>\1</b>', text)
     
     # 3. Convert **bold** to <b>bold</b>
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
     
-    # 4. Fallback: Convert remaining standard bullet points to a nice unicode bullet
-    text = re.sub(r'(?m)^[-*]\s+', r'▪️ ', text)
+    # 4. Convert standard bullet points to a nice unicode bullet with a newline buffer
+    text = re.sub(r'(?m)^[-*]\s+', r'\n▪️ ', text)
+    
+    # 5. Clean up any accidental triple-newlines created by the above logic
+    text = re.sub(r'\n{3,}', r'\n\n', text)
     
     return text.strip()
 
