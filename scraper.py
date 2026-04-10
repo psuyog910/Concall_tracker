@@ -519,7 +519,7 @@ def generate_summary_image(symbol: str, date_raw: str, markdown_text: str) -> Op
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch()
-            page = browser.new_page(viewport={{'width': 900, 'height': 1200}})
+            page = browser.new_page(viewport={'width': 900, 'height': 1200})
             page.set_content(html_template)
             # Wait for any webfonts to load
             page.wait_for_timeout(1000)
