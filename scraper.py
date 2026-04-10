@@ -38,9 +38,9 @@ SUMMARIES_DIR.mkdir(exist_ok=True)
 
 SCREENER_URL = "https://www.screener.in/company/{symbol}/"
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
 # If True, saves summaries but DOES NOT send Telegram alerts.
 SILENT_MODE = False
