@@ -35,6 +35,7 @@ STOCKS_FILE = BASE_DIR / "stocks.txt"
 STATE_FILE = BASE_DIR / "last_concall.json"
 SUMMARIES_DIR = BASE_DIR / "summaries"
 SUMMARIES_DIR.mkdir(exist_ok=True)
+PROMPT_FILE = BASE_DIR / "prompt.md"
 
 SCREENER_URL = "https://www.screener.in/company/{symbol}/"
 
@@ -259,38 +260,7 @@ def extract_pdf_text(pdf_url: str) -> Optional[str]:
 # Gemini summarisation
 # ---------------------------------------------------------------------------
 
-SUMMARY_PROMPT = """\
-You are a professional equity research analyst.
 
-Summarize the following earnings concall transcript into:
-
-## Key Highlights
-
-## Growth Drivers
-
-## Management Guidance
-
-## Risks / Concerns
-
-## Capex / Expansion
-
-## Order Book / Demand
-
-## Margins Commentary
-
-## Analyst Q&A Key Points
-
-## Red Flags (if any)
-
-## Overall Tone (Bullish / Neutral / Bearish)
-
-Keep summary concise and professional.
-Use appropriate emojis for section headers or bullet points (e.g., 🔹, 📈, ⚠️) to make it highly readable.
-Prioritize brevity: use short bullet points instead of long paragraphs.
-
-Transcript:
-{transcript}
-"""
 
 
 def summarise_transcript(transcript_text: str) -> Optional[str]:
@@ -307,7 +277,14 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
         log.warning("Transcript truncated from %d to %d chars", len(transcript_text), max_chars)
         transcript_text = transcript_text[:max_chars]
 
-    prompt = SUMMARY_PROMPT.format(transcript=transcript_text)
+    # Load prompt from external file
+    if PROMPT_FILE.exists():
+        prompt_template = PROMPT_FILE.read_text(encoding="utf-8")
+    else:
+        log.warning("prompt.md not found - using simple fallback prompt")
+        prompt_template = "Summarize this concall transcript briefly:\n\n{transcript}"
+
+    prompt = prompt_template.format(transcript=transcript_text)
 
     # Try multiple models as fallback (quota is per-model on free tier)
     models_to_try = [
