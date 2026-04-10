@@ -10,10 +10,6 @@ STRICT RULES:
 • Use emojis only for section headers and key bullets to improve readability.
 • Output strictly in the exact markdown format below — no extra text before or after.
 
-Transcript:
-{transcript}
-
----
 
 ## 📊 Financial Performance
 - **Revenue**: [exact figure] | YoY: [+% / -%] | QoQ: [+% / -%]
