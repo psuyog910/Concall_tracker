@@ -39,4 +39,5 @@ jobs:
           git add last_concall.json summaries/
           # Only commit if there are changes
           git diff --staged --quiet || git commit -m "🤖 Update concall state and summaries [$(date -u +'%Y-%m-%d %H:%M UTC')]"
+          git pull --rebase origin main
           git push
