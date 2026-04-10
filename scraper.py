@@ -38,7 +38,8 @@ SUMMARIES_DIR.mkdir(exist_ok=True)
 
 SCREENER_URL = "https://www.screener.in/company/{symbol}/"
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+# Forcefully strip all invisible/illegal characters (even inside the string)
+GEMINI_API_KEY = re.sub(r'[^A-Za-z0-9_\-\.]', '', os.environ.get("GEMINI_API_KEY", ""))
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
