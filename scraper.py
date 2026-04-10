@@ -310,6 +310,8 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
 
     # Try multiple models as fallback (quota is per-model on free tier)
     models_to_try = [
+        "gemma-4-31b-it",          # Newest Gemma 4 (31B Dense)
+        "gemma-4-26b-a4b-it",      # Newest Gemma 4 (26B MoE)
         "gemini-2.5-pro-exp-03-25",
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
