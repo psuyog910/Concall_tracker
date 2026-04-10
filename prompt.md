@@ -31,7 +31,7 @@ Provide YoY and QoQ updates in percentage terms (%) where possible. For margins,
 
 Keep summary concise and professional.
 Use appropriate emojis for section headers or bullet points (e.g., 🔹, 📈, ⚠️) to make it highly readable.
-Prioritize brevity: use short bullet points instead of long paragraphs.
+Prioritize brevity: use short bullet points or short paragraphs.
 
 Transcript:
 {transcript}
