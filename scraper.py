@@ -361,18 +361,48 @@ def save_summary(symbol: str, date_iso: str, date_raw: str, summary: str) -> Pat
 # Telegram notification
 # ---------------------------------------------------------------------------
 
-def generate_summary_image(symbol: str, date_raw: str, markdown_text: str) -> Optional[Path]:
+def extract_tone(markdown_text: str) -> str:
+    """Extract the overall tone from the markdown summary."""
+    match = re.search(r"Overall tone:\s*\*\*?(.*?)\*\*?", markdown_text, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return "Neutral"
+
+
+def split_summary(markdown_text: str) -> list[str]:
+    """Split markdown summary into two logical parts at a major header."""
+    # Preferred split points (headers)
+    split_headers = [
+        "## 🏗️ Capex",
+        "## ⚠️ Risks",
+        "## 🏗️ Capex / Expansion / Order Book",
+        "## ⚠️ Risks, Concerns & Red Flags"
+    ]
+    
+    for header in split_headers:
+        if header in markdown_text:
+            parts = markdown_text.split(header, 1)
+            return [parts[0].strip(), (header + "\n" + parts[1]).strip()]
+            
+    # Fallback to middle-ish split if no header found
+    lines = markdown_text.splitlines()
+    mid = len(lines) // 2
+    return ["\n".join(lines[:mid]), "\n".join(lines[mid:])]
+
+
+def generate_summary_image(symbol: str, date_raw: str, markdown_text: str, part_num: int = 1) -> Optional[Path]:
     """Render the markdown summary to a sleek dark-themed PNG image."""
     if not markdown or not sync_playwright:
         log.warning("markdown or playwright not installed – skipping image generation")
         return None
 
-    log.info("Generating sleek PNG summary for %s...", symbol)
+    log.info("Generating sleek PNG summary Part %d for %s...", part_num, symbol)
     
     # Convert MD to HTML
     content_html = markdown.markdown(markdown_text, extensions=['extra', 'sane_lists'])
     
     # Premium Sleek/Dark Template
+    part_indicator = f"Part {part_num}" if part_num > 1 else "Executive Summary"
     html_template = f"""
     <!DOCTYPE html>
     <html>
@@ -497,7 +527,7 @@ def generate_summary_image(symbol: str, date_raw: str, markdown_text: str) -> Op
     <body>
         <div class="container">
             <div class="header">
-                <div class="badge">Equity Research Summary</div>
+                <div class="badge">Equity Research Summary • {part_indicator}</div>
                 <h1>{symbol}</h1>
                 <div class="meta">Earnings Call Transcript • {date_raw}</div>
             </div>
@@ -514,7 +544,7 @@ def generate_summary_image(symbol: str, date_raw: str, markdown_text: str) -> Op
     </html>
     """
 
-    output_path = SUMMARIES_DIR / f"{symbol}_summary.png"
+    output_path = SUMMARIES_DIR / f"{symbol}_P{part_num}.png"
     
     try:
         with sync_playwright() as p:
@@ -532,10 +562,10 @@ def generate_summary_image(symbol: str, date_raw: str, markdown_text: str) -> Op
                 page.screenshot(path=str(output_path), full_page=True)
                 
             browser.close()
-            log.info("Image saved to %s", output_path)
+            log.info("Image Part %d saved to %s", part_num, output_path)
             return output_path
     except Exception as exc:
-        log.error("Failed to generate image: %s", exc)
+        log.error("Failed to generate image Part %d: %s", part_num, exc)
         return None
 
 
@@ -559,65 +589,85 @@ def format_telegram_html(text: str) -> str:
     return text.strip()
 
 def send_telegram(symbol: str, date_raw: str, summary: str) -> bool:
-    """Send a Telegram notification (text or PNG image fallback)."""
+    """Send a Telegram notification (text or 2-part PNG gallery fallback)."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         log.warning("Telegram credentials not set – skipping notification")
         return False
 
-    # Decide if we need an image (length-based or complex formatting)
-    # Trigger image if >3000 chars to leave buffer for HTML tags (Telegram limit is 4096).
+    # Metadata for caption
+    tone = extract_tone(summary)
+    
+    # Decide if we need an image (length-based)
     use_image = len(summary) > 3000
-    image_path = None
+    image_paths = []
     
     if use_image:
-        log.info("Summary too long (%d chars) – switching to image fallback", len(summary))
-        image_path = generate_summary_image(symbol, date_raw, summary)
-        if not image_path:
+        log.info("Summary too long (%d chars) – switching to 2-part image gallery", len(summary))
+        parts = split_summary(summary)
+        for i, part_content in enumerate(parts, 1):
+            path = generate_summary_image(symbol, date_raw, part_content, i)
+            if path:
+                image_paths.append(path)
+        
+        if not image_paths:
             log.warning("Image generation failed, falling back to truncated text")
             use_image = False
 
-    if use_image and image_path:
-        # Send Photo
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+    if use_image and image_paths:
+        # Send Media Group (Gallery)
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMediaGroup"
+        
+        caption = (
+            f"🏢 <b>Stock:</b> <code>{symbol}</code>\n"
+            f"📅 <b>Date:</b> {date_raw}\n"
+            f"🎯 <b>Tone:</b> {tone}\n"
+            f"🔗 <a href='https://www.screener.in/company/{symbol}/'>View on Screener</a>"
+        )
+        
+        media = []
+        files = {}
+        for i, path in enumerate(image_paths):
+            key = f"photo{i}"
+            media.append({
+                "type": "photo",
+                "media": f"attach://{key}",
+                "caption": caption if i == 0 else "", # Caption on the first image
+                "parse_mode": "HTML"
+            })
+            files[key] = open(path, "rb")
+            
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
-            "caption": (
-                f"🚨 <b>NEW CONCALL DETECTED: {symbol}</b>\n"
-                f"📅 {date_raw}\n\n"
-                f"🔗 <a href='https://www.screener.in/company/{symbol}/'>View on Screener</a>"
-            ),
-            "parse_mode": "HTML",
+            "media": json.dumps(media)
         }
-        files = {"photo": open(image_path, "rb")}
         
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                resp = requests.post(url, data=payload, files=files, timeout=30)
+                resp = requests.post(url, data=payload, files=files, timeout=40)
                 if resp.status_code == 200:
-                    log.info("Telegram PNG alert sent for %s", symbol)
+                    log.info("Telegram Media Group sent for %s", symbol)
                     return True
                 else:
-                    log.warning("Telegram SG attempt %d/%d – status %d", attempt, MAX_RETRIES, resp.status_code)
+                    log.warning("Telegram SG Group attempt %d/%d – status %d: %s", attempt, MAX_RETRIES, resp.status_code, resp.text)
             except requests.RequestException as exc:
-                log.warning("Telegram SG attempt %d/%d failed: %s", attempt, MAX_RETRIES, exc)
+                log.warning("Telegram SG Group attempt %d/%d failed: %s", attempt, MAX_RETRIES, exc)
             time.sleep(RETRY_DELAY)
         return False
 
     else:
-        # Send Text Message (Rest of original logic)
+        # Send Text Message (Original logic)
+        msg_suffix = ""
         if len(summary) > 3000:
-            # If use_image was True but we are here, it means image_path was None
-            msg_suffix = "\n\n... [Truncated - PNG Generation Failed]" if len(summary) > 3000 else ""
-            short_summary = summary[:3000] + msg_suffix
-        else:
-            short_summary = summary
-            
+             msg_suffix = "\n\n... [Truncated - PNG Generation Failed]" if use_image else "\n\n... [Truncated]"
+        
+        short_summary = summary[:3000] + msg_suffix
         html_summary = format_telegram_html(short_summary)
 
         message = (
             f"🚨 <b>NEW CONCALL DETECTED</b>\n\n"
             f"🏢 <b>Stock:</b> <code>{symbol}</code>\n"
-            f"📅 <b>Date:</b> {date_raw}\n\n"
+            f"📅 <b>Date:</b> {date_raw}\n"
+            f"🎯 <b>Tone:</b> {tone}\n\n"
             f"🤖 <b>AI Summary:</b>\n"
             f"<blockquote expandable>{html_summary}</blockquote>\n\n"
             f"🔗 <a href='https://www.screener.in/company/{symbol}/'>View Full Details on Screener</a>"
