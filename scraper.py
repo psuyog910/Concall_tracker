@@ -565,8 +565,8 @@ def send_telegram(symbol: str, date_raw: str, summary: str) -> bool:
         return False
 
     # Decide if we need an image (length-based or complex formatting)
-    # Telegram limit is 4096, but we leave buffer for tags and header.
-    use_image = len(summary) > 3500
+    # Trigger image if >3000 chars to leave buffer for HTML tags (Telegram limit is 4096).
+    use_image = len(summary) > 3000
     image_path = None
     
     if use_image:
@@ -605,7 +605,13 @@ def send_telegram(symbol: str, date_raw: str, summary: str) -> bool:
 
     else:
         # Send Text Message (Rest of original logic)
-        short_summary = summary[:3500] + "\n\n... [Truncated]" if len(summary) > 3500 else summary
+        if len(summary) > 3000:
+            # If use_image was True but we are here, it means image_path was None
+            msg_suffix = "\n\n... [Truncated - PNG Generation Failed]" if len(summary) > 3000 else ""
+            short_summary = summary[:3000] + msg_suffix
+        else:
+            short_summary = summary
+            
         html_summary = format_telegram_html(short_summary)
 
         message = (
