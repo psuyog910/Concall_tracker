@@ -5,6 +5,7 @@ Scrapes Screener.in for new earnings concall transcripts,
 summarizes them with Gemini, and sends Telegram alerts.
 """
 
+import argparse
 import io
 import json
 import logging
@@ -12,6 +13,7 @@ import os
 import re
 import sys
 import time
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -24,6 +26,16 @@ try:
     import pypdf
 except ImportError:
     pypdf = None
+    
+try:
+    import markdown
+except ImportError:
+    markdown = None
+
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    sync_playwright = None
 
 import google.generativeai as genai
 
@@ -299,7 +311,10 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
 
     for model_name in models_to_try:
         log.info("Trying Gemini model: %s", model_name)
-        model = genai.GenerativeModel(model_name)
+        model = genai.GenerativeModel(
+            model_name,
+            generation_config={"max_output_tokens": 1000, "temperature": 0.2}
+        )
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 response = model.generate_content(prompt)
@@ -346,6 +361,184 @@ def save_summary(symbol: str, date_iso: str, date_raw: str, summary: str) -> Pat
 # Telegram notification
 # ---------------------------------------------------------------------------
 
+def generate_summary_image(symbol: str, date_raw: str, markdown_text: str) -> Optional[Path]:
+    """Render the markdown summary to a sleek dark-themed PNG image."""
+    if not markdown or not sync_playwright:
+        log.warning("markdown or playwright not installed – skipping image generation")
+        return None
+
+    log.info("Generating sleek PNG summary for %s...", symbol)
+    
+    # Convert MD to HTML
+    content_html = markdown.markdown(markdown_text, extensions=['extra', 'sane_lists'])
+    
+    # Premium Sleek/Dark Template
+    html_template = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+            
+            :root {{
+                --bg: #0f172a;
+                --card: rgba(30, 41, 59, 0.7);
+                --accent: #38bdf8;
+                --text: #f1f5f9;
+                --text-muted: #94a3b8;
+                --border: rgba(255, 255, 255, 0.1);
+            }}
+            
+            body {{
+                background: var(--bg);
+                color: var(--text);
+                font-family: 'Inter', -apple-system, sans-serif;
+                margin: 0;
+                padding: 40px;
+                display: flex;
+                justify-content: center;
+                line-height: 1.6;
+            }}
+            
+            .container {{
+                max-width: 800px;
+                background: var(--card);
+                backdrop-filter: blur(12px);
+                border: 1px solid var(--border);
+                border-radius: 24px;
+                padding: 50px;
+                box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            }}
+            
+            .header {{
+                border-bottom: 1px solid var(--border);
+                margin-bottom: 30px;
+                padding-bottom: 20px;
+            }}
+            
+            .badge {{
+                display: inline-block;
+                background: rgba(56, 189, 248, 0.1);
+                color: var(--accent);
+                padding: 4px 12px;
+                border-radius: 99px;
+                font-size: 12px;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                margin-bottom: 12px;
+            }}
+            
+            h1 {{
+                margin: 0;
+                font-size: 32px;
+                font-weight: 700;
+                background: linear-gradient(to right, #fff, #94a3b8);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }}
+            
+            .meta {{
+                color: var(--text-muted);
+                font-size: 14px;
+                margin-top: 8px;
+            }}
+            
+            h2 {{
+                color: var(--accent);
+                font-size: 18px;
+                margin-top: 35px;
+                margin-bottom: 15px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+            }}
+            
+            ul {{
+                padding-left: 20px;
+                margin: 0;
+            }}
+            
+            li {{
+                margin-bottom: 8px;
+            }}
+            
+            strong {{
+                color: #fff;
+                font-weight: 600;
+            }}
+            
+            code {{
+                background: rgba(0,0,0,0.3);
+                padding: 2px 6px;
+                border-radius: 4px;
+                font-family: monospace;
+                font-size: 0.9em;
+            }}
+            
+            hr {{
+                border: 0;
+                border-top: 1px solid var(--border);
+                margin: 30px 0;
+            }}
+
+            .footer-watermark {{
+                margin-top: 40px;
+                text-align: center;
+                font-size: 12px;
+                color: var(--text-muted);
+                opacity: 0.5;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <div class="badge">Equity Research Summary</div>
+                <h1>{symbol}</h1>
+                <div class="meta">Earnings Call Transcript • {date_raw}</div>
+            </div>
+            
+            <div class="content">
+                {content_html}
+            </div>
+
+            <div class="footer-watermark">
+                AI Generated Research • Screener.in
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+    output_path = SUMMARIES_DIR / f"{symbol}_summary.png"
+    
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={{'width': 900, 'height': 1200}})
+            page.set_content(html_template)
+            # Wait for any webfonts to load
+            page.wait_for_timeout(1000)
+            
+            # Clip to the container to avoid huge whitespace
+            container = page.query_selector(".container")
+            if container:
+                container.screenshot(path=str(output_path), animations="disabled")
+            else:
+                page.screenshot(path=str(output_path), full_page=True)
+                
+            browser.close()
+            log.info("Image saved to %s", output_path)
+            return output_path
+    except Exception as exc:
+        log.error("Failed to generate image: %s", exc)
+        return None
+
+
 def format_telegram_html(text: str) -> str:
     """Convert AI markdown summary to Telegram-compatible HTML safely with better spacing."""
     # 1. Escape HTML special chars (must do this first!)
@@ -366,49 +559,82 @@ def format_telegram_html(text: str) -> str:
     return text.strip()
 
 def send_telegram(symbol: str, date_raw: str, summary: str) -> bool:
-    """Send a Telegram message when a new concall is detected."""
+    """Send a Telegram notification (text or PNG image fallback)."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         log.warning("Telegram credentials not set – skipping notification")
         return False
 
-    # Truncate summary for Telegram (4096 char limit minus header/footer)
-    short_summary = summary[:3500] if len(summary) > 3500 else summary
-    html_summary = format_telegram_html(short_summary)
+    # Decide if we need an image (length-based or complex formatting)
+    # Telegram limit is 4096, but we leave buffer for tags and header.
+    use_image = len(summary) > 3500
+    image_path = None
+    
+    if use_image:
+        log.info("Summary too long (%d chars) – switching to image fallback", len(summary))
+        image_path = generate_summary_image(symbol, date_raw, summary)
+        if not image_path:
+            log.warning("Image generation failed, falling back to truncated text")
+            use_image = False
 
-    message = (
-        f"🚨 <b>NEW CONCALL DETECTED</b>\n\n"
-        f"🏢 <b>Stock:</b> <code>{symbol}</code>\n"
-        f"📅 <b>Date:</b> {date_raw}\n\n"
-        f"🤖 <b>AI Summary:</b>\n"
-        f"<blockquote expandable>{html_summary}</blockquote>\n\n"
-        f"🔗 <a href='https://www.screener.in/company/{symbol}/'>View Full Details on Screener</a>"
-    )
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            resp = requests.post(url, json=payload, timeout=15)
-            if resp.status_code == 200:
-                log.info("Telegram alert sent for %s", symbol)
-                return True
-            else:
-                log.warning(
-                    "Telegram attempt %d/%d – status %d: %s",
-                    attempt, MAX_RETRIES, resp.status_code, resp.text,
-                )
-        except requests.RequestException as exc:
-            log.warning("Telegram attempt %d/%d failed: %s", attempt, MAX_RETRIES, exc)
-        if attempt < MAX_RETRIES:
+    if use_image and image_path:
+        # Send Photo
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "caption": (
+                f"🚨 <b>NEW CONCALL DETECTED: {symbol}</b>\n"
+                f"📅 {date_raw}\n\n"
+                f"🔗 <a href='https://www.screener.in/company/{symbol}/'>View on Screener</a>"
+            ),
+            "parse_mode": "HTML",
+        }
+        files = {"photo": open(image_path, "rb")}
+        
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                resp = requests.post(url, data=payload, files=files, timeout=30)
+                if resp.status_code == 200:
+                    log.info("Telegram PNG alert sent for %s", symbol)
+                    return True
+                else:
+                    log.warning("Telegram SG attempt %d/%d – status %d", attempt, MAX_RETRIES, resp.status_code)
+            except requests.RequestException as exc:
+                log.warning("Telegram SG attempt %d/%d failed: %s", attempt, MAX_RETRIES, exc)
             time.sleep(RETRY_DELAY)
+        return False
 
-    log.error("Telegram notification failed after %d attempts", MAX_RETRIES)
+    else:
+        # Send Text Message (Rest of original logic)
+        short_summary = summary[:3500] + "\n\n... [Truncated]" if len(summary) > 3500 else summary
+        html_summary = format_telegram_html(short_summary)
+
+        message = (
+            f"🚨 <b>NEW CONCALL DETECTED</b>\n\n"
+            f"🏢 <b>Stock:</b> <code>{symbol}</code>\n"
+            f"📅 <b>Date:</b> {date_raw}\n\n"
+            f"🤖 <b>AI Summary:</b>\n"
+            f"<blockquote expandable>{html_summary}</blockquote>\n\n"
+            f"🔗 <a href='https://www.screener.in/company/{symbol}/'>View Full Details on Screener</a>"
+        )
+
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                resp = requests.post(url, json=payload, timeout=15)
+                if resp.status_code == 200:
+                    log.info("Telegram text alert sent for %s", symbol)
+                    return True
+                log.warning("Telegram attempt %d/%d – status %d", attempt, MAX_RETRIES, resp.status_code)
+            except requests.RequestException as exc:
+                log.warning("Telegram attempt failed: %s", exc)
+            time.sleep(RETRY_DELAY)
     return False
 
 
@@ -478,7 +704,28 @@ def process_stock(symbol: str, state: dict) -> bool:
 
 
 def main() -> None:
-    """Entry point – loop through all stocks."""
+    """Entry point – handle arguments and loop through all stocks."""
+    parser = argparse.ArgumentParser(description="Stock Concall Monitor")
+    parser.add_argument("--test", type=str, help="Path to a markdown file to test sending a summary")
+    parser.add_argument("--symbol", type=str, default="TEST_STOCK", help="Symbol for the test run")
+    parser.add_argument("--date", type=str, default="Now", help="Date for the test run")
+    args = parser.parse_args()
+
+    if args.test:
+        test_path = Path(args.test)
+        if not test_path.exists():
+            log.error("Test file not found: %s", test_path)
+            sys.exit(1)
+        
+        summary_content = test_path.read_text(encoding="utf-8")
+        log.info("🚀 Running Test Mode: sending %s to Telegram...", test_path.name)
+        success = send_telegram(args.symbol, args.date, summary_content)
+        if success:
+            log.info("✅ Test run successful.")
+        else:
+            log.error("❌ Test run failed.")
+        return
+
     log.info("🚀 Concall Monitor starting…")
 
     stocks = load_stocks()

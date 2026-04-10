@@ -7,6 +7,15 @@ on:
     # Daily at 9:00 AM IST (3:30 AM UTC)
     - cron: '30 3 * * *'
   workflow_dispatch: # Allow manual trigger from GitHub UI
+    inputs:
+      test_file:
+        description: 'Path to a markdown file in summaries/ to test (e.g. summaries/ACE_2026_02_01.md)'
+        required: false
+        default: ''
+      test_symbol:
+        description: 'Symbol for the test'
+        required: false
+        default: 'TEST_RUN'
 
 permissions:
   contents: write
@@ -25,14 +34,22 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
 
       - name: Run concall monitor
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python scraper.py
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.test_file }}" != "" ]; then
+            echo "Running manual test for ${{ github.event.inputs.test_file }}..."
+            python scraper.py --test "${{ github.event.inputs.test_file }}" --symbol "${{ github.event.inputs.test_symbol }}"
+          else
+            python scraper.py
+          fi
 
       - name: Commit updated state and summaries
         run: |

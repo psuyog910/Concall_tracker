@@ -6,9 +6,11 @@ STRICT RULES:
 • Use ONLY information explicitly stated in the transcript. Never hallucinate numbers, guidance, or events.
 • For every financial metric, quote the exact figure + period mentioned. Calculate YoY/QoQ % only when both current and comparable prior figures are given in the transcript.
 • If a section is not discussed at all, write “Not discussed in this transcript.”
-• Keep the entire summary crisp and investor-friendly (aim for 200-300 words total).
+• Keep the entire summary crisp and investor-friendly (STRICTLY MAXIMUM 300 words total).
 • Use emojis only for section headers and key bullets to improve readability.
-• Output strictly in the exact markdown format below — no extra text before or after.
+• DO NOT include any chain-of-thought, reasoning, `<think>` tags, or conversational filler.
+• DO NOT regurgitate the prompt, instructions, or self-checks.
+• Output strictly in the exact markdown format below — NO extra text before or after the markdown.
 
 
 ## 📊 Financial Performance
@@ -37,13 +39,11 @@ STRICT RULES:
 • Any red flags (evasive answers, inconsistent numbers, guidance cuts, margin pressure, etc.).
 
 ## 💬 Analyst Q&A Key Takeaways
-• 4–6 most insightful questions + management responses (focus on probing or contentious topics).
+• 3–4 most insightful questions + management responses (focus on probing or contentious topics).
 
 ## 🎯 Overall Tone & Credibility
 • Overall tone: **Bullish / Cautiously Bullish / Neutral / Cautiously Bearish / Bearish**
-• One-sentence justification of tone + quick note on management credibility (consistency with past calls if referenced, or clarity of answers).
-
-Keep language professional yet easy to read. Prioritise brevity and clarity over length. Use short bullets everywhere.
+• One-sentence justification of tone + quick note on management credibility.
 
 Transcript:
 {transcript}
