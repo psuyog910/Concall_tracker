@@ -1,6 +1,6 @@
 """
 Quarterly results monitor: detect latest Screener.in quarterly PDF, extract metrics with Gemini,
-render a ResultRadar-style PNG, notify Telegram.
+render a generic quarterly snapshot PNG, notify Telegram.
 """
 
 from __future__ import annotations
@@ -123,13 +123,114 @@ def page_text_snippet(soup: BeautifulSoup, limit: int = 10000) -> str:
 # ---------------------------------------------------------------------------
 # Gemini → JSON payload
 # ---------------------------------------------------------------------------
+#
+# Gemma models (gemma-*-it) do not reliably honor Gemini's structured-output
+# `response_mime_type: application/json`; the API often returns an empty body,
+# which surfaces as json.loads(""). Use plain text + "JSON only" suffix for Gemma.
+#
+# Deprecated 2.0 Flash* often shows free-tier quota limit 0 — prefer 2.5 family IDs
+# from https://ai.google.dev/gemini-api/docs/models
+#
+_JSON_ONLY_SUFFIX = (
+    "\n\nOutput: reply with exactly one JSON object and nothing else "
+    "(no markdown fences, no commentary)."
+)
 
-def _parse_json_loose(raw: str) -> dict[str, Any]:
-    text = raw.strip()
+# (model_id, supports_application_json_mime)
+_QUARTERLY_MODEL_TRIALS: tuple[tuple[str, bool], ...] = (
+    ("gemini-2.5-flash", True),
+    ("gemini-2.5-flash-lite", True),
+    ("gemini-2.5-pro", True),
+    ("gemini-1.5-flash", True),
+    ("gemini-1.5-pro", True),
+    # Last resort: deprecated for many keys but some projects still have quota
+    ("gemini-2.0-flash", True),
+    ("gemini-2.0-flash-lite", True),
+    # Gemma: text-only JSON (no MIME) — slow; try after Gemini
+    ("gemma-4-31b-it", False),
+    ("gemma-4-26b-a4b-it", False),
+)
+
+
+def _gemini_response_text(response: Any) -> str:
+    """Robust text extraction (blocked / empty .text / multi-part)."""
+    if response is None:
+        return ""
+    try:
+        t = response.text
+        if t and str(t).strip():
+            return str(t).strip()
+    except Exception:
+        pass
+    try:
+        parts: list[str] = []
+        for cand in response.candidates or []:
+            content = getattr(cand, "content", None)
+            if not content or not getattr(content, "parts", None):
+                continue
+            for part in content.parts:
+                txt = getattr(part, "text", None)
+                if txt:
+                    parts.append(txt)
+        return "\n".join(parts).strip()
+    except Exception:
+        return ""
+
+
+def _log_prompt_feedback(response: Any) -> None:
+    try:
+        fb = getattr(response, "prompt_feedback", None)
+        if fb is not None:
+            br = getattr(fb, "block_reason", None)
+            if br:
+                log.warning("Gemini prompt_feedback block_reason=%s (%s)", br, fb)
+    except Exception:
+        pass
+
+
+def _parse_json_flexible(raw: str) -> dict[str, Any]:
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("empty model output")
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\s*```\s*$", "", text)
-    return json.loads(text)
+        text = re.sub(r"\s*```\s*$", "", text).strip()
+    try:
+        out = json.loads(text)
+        if isinstance(out, dict):
+            return out
+    except json.JSONDecodeError:
+        pass
+    dec = json.JSONDecoder()
+    for i, ch in enumerate(text):
+        if ch != "{":
+            continue
+        try:
+            obj, _end = dec.raw_decode(text[i:])
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            continue
+    raise ValueError("no JSON object in model output")
+
+
+def _sleep_after_rate_limit(exc: Exception) -> None:
+    msg = str(exc)
+    m = re.search(r"retry in ([\d.]+)\s*s", msg, re.IGNORECASE)
+    if m:
+        time.sleep(min(125.0, float(m.group(1)) + 1.5))
+    else:
+        time.sleep(25)
+
+
+def _is_model_not_found(exc: Exception) -> bool:
+    s = str(exc).lower()
+    return "404" in s and "not found" in s
+
+
+def _is_quota_exhausted(exc: Exception) -> bool:
+    s = str(exc).lower()
+    return "429" in s or "quota" in s or "resource exhausted" in s
 
 
 def build_quarterly_payload(
@@ -148,7 +249,7 @@ def build_quarterly_payload(
         log.error("quarterly_prompt.md missing")
         return None
 
-    prompt = template.format(
+    base_prompt = template.format(
         symbol=symbol,
         company_name=company_name or symbol,
         pdf_text=pdf_text[:120000],
@@ -156,65 +257,91 @@ def build_quarterly_payload(
     )
 
     genai.configure(api_key=GEMINI_API_KEY)
-    models_to_try = [
-        "gemma-4-31b-it",          # Newest Gemma 4 (31B Dense)
-        "gemma-4-26b-a4b-it",      # Newest Gemma 4 (26B MoE)
-        "gemini-2.5-pro-exp-03-25",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
-    ]
 
-    for model_name in models_to_try:
-        log.info("Quarterly JSON: trying model %s", model_name)
+    for model_name, use_json_mime in _QUARTERLY_MODEL_TRIALS:
+        log.info("Quarterly JSON: trying model %s (json_mime=%s)", model_name, use_json_mime)
+        prompt = base_prompt + (_JSON_ONLY_SUFFIX if not use_json_mime else "")
+
+        gen_cfg: dict[str, Any] = {"temperature": 0.15}
+        if use_json_mime:
+            gen_cfg["response_mime_type"] = "application/json"
+
         try:
-            model = genai.GenerativeModel(
-                model_name,
-                generation_config={
-                    "temperature": 0.15,
-                    "response_mime_type": "application/json",
-                },
-            )
-            for attempt in range(1, MAX_RETRIES + 1):
-                try:
-                    response = model.generate_content(prompt)
-                    payload = _parse_json_loose(response.text)
-                    if not isinstance(payload, dict):
-                        continue
-                    rows = payload.get("rows")
-                    if not isinstance(rows, list) or len(rows) < 3:
-                        log.warning("Gemini returned unusable rows; retrying")
-                        continue
-                    payload["_model"] = model_name
-                    return payload
-                except Exception as exc:
+            model = genai.GenerativeModel(model_name, generation_config=gen_cfg)
+        except Exception as exc:
+            log.warning("Quarterly model %s init failed: %s", model_name, exc)
+            continue
+
+        model_gave_404 = False
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                response = model.generate_content(prompt)
+                raw = _gemini_response_text(response)
+                if not raw:
+                    _log_prompt_feedback(response)
                     log.warning(
-                        "Quarterly JSON model %s attempt %d/%d: %s",
+                        "Quarterly model %s attempt %d/%d: empty output "
+                        "(Gemma often needs json_mime=false; or content blocked)",
                         model_name,
                         attempt,
                         MAX_RETRIES,
-                        exc,
                     )
                     if attempt < MAX_RETRIES:
                         time.sleep(RETRY_DELAY * attempt)
-        except Exception as exc:
-            log.warning("Quarterly model %s init/generate failed: %s", model_name, exc)
+                    continue
+                payload = _parse_json_flexible(raw)
+                rows = payload.get("rows")
+                if not isinstance(rows, list) or len(rows) < 3:
+                    log.warning("Gemini returned unusable rows; retrying")
+                    if attempt < MAX_RETRIES:
+                        time.sleep(RETRY_DELAY * attempt)
+                    continue
+                payload["_model"] = model_name
+                return payload
+            except Exception as exc:
+                if _is_model_not_found(exc):
+                    log.warning("Quarterly model %s not available (404), skipping", model_name)
+                    model_gave_404 = True
+                    break
+                if _is_quota_exhausted(exc):
+                    log.warning(
+                        "Quarterly model %s quota / rate limit, trying next model",
+                        model_name,
+                    )
+                    _sleep_after_rate_limit(exc)
+                    break
+                log.warning(
+                    "Quarterly JSON model %s attempt %d/%d: %s",
+                    model_name,
+                    attempt,
+                    MAX_RETRIES,
+                    exc,
+                )
+                if attempt < MAX_RETRIES:
+                    time.sleep(RETRY_DELAY * attempt)
+        if model_gave_404:
+            continue
 
     log.error("Quarterly JSON extraction failed for all models")
     return None
 
 
 # ---------------------------------------------------------------------------
-# ResultRadar-style PNG
+# Quarterly snapshot PNG (generic template, no third-party branding)
 # ---------------------------------------------------------------------------
 
-def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    candidates = [
+def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    regular = [
         Path(r"C:\Windows\Fonts\segoeui.ttf"),
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
         Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
     ]
+    bold_faces = [
+        Path(r"C:\Windows\Fonts\segoeuib.ttf"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+        Path("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"),
+    ]
+    candidates = bold_faces if bold else regular
     for p in candidates:
         if p.exists():
             try:
@@ -225,52 +352,49 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 
 
 def _tone_color(tone: str) -> tuple[int, int, int]:
+    """QoQ / YoY colours (mint rose / teal — distinct from the old cyan / red pairing)."""
     t = (tone or "neutral").lower()
     if t == "neg":
-        return (248, 113, 113)
+        return (251, 113, 133)
     if t == "pos":
-        return (125, 211, 252)
+        return (94, 234, 212)
     return (148, 163, 184)
 
 
-def render_result_radar_card(
+def render_quarterly_card(
     symbol: str,
     payload: dict[str, Any],
     out_path: Path,
 ) -> bool:
     W, H = 920, 1280
-    BG = (26, 38, 63)
-    HEADER_ROW = (20, 28, 48)
-    TABLE_HEAD = (30, 41, 68)
-    ROW_A = (24, 34, 56)
-    ROW_B = (22, 32, 52)
-    FOOTER_BAR = (30, 41, 59)
-    LIME = (190, 242, 100)
-    ORANGE = (251, 146, 60)
-    WHITE = (241, 245, 249)
-    GREY = (148, 163, 184)
+    # Cool slate / petrol palette (not the previous navy + lime stack)
+    BG = (15, 24, 32)
+    TABLE_HEAD = (28, 42, 58)
+    ROW_A = (22, 34, 48)
+    ROW_B = (18, 30, 44)
+    FOOTER_BAR = (20, 32, 46)
+    ACCENT = (56, 189, 172)
+    RATING = (244, 180, 76)
+    WHITE = (238, 242, 255)
+    GREY = (130, 146, 168)
+    RULE = (48, 62, 78)
 
     img = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)
-
-    # Watermark
-    wm_font = _load_font(18)
-    for x in range(-40, W, 180):
-        for y in range(0, H, 140):
-            draw.text((x, y), "ResultRadar", fill=(36, 50, 78), font=wm_font)
+    draw.rectangle([0, 0, W, 4], fill=ACCENT)
 
     pad = 32
-    y = 24
+    y = 28
 
-    f_title = _load_font(15)
+    f_tag = _load_font(14)
     f_q = _load_font(22)
-    f_sym = _load_font(34)
-    f_sub = _load_font(18)
-    f_rate = _load_font(22)
+    f_sym = _load_font(36, bold=True)
+    f_sub = _load_font(17)
+    f_rate = _load_font(20)
     f_small = _load_font(13)
-    f_th = _load_font(14)
+    f_th = _load_font(14, bold=True)
     f_td = _load_font(14)
-    f_foot = _load_font(26)
+    f_foot = _load_font(26, bold=True)
     f_dis = _load_font(11)
 
     quarter_label = str(payload.get("quarter_label") or "—")
@@ -278,21 +402,22 @@ def render_result_radar_card(
     company_line = str(payload.get("company_name") or payload.get("company_line") or "")
     rating = str(payload.get("rating") or "—")
 
-    draw.text((pad, y), "ResultRadar by QuantPilotLabs", fill=WHITE, font=f_title)
+    tag = "Quarterly snapshot"
+    draw.text((pad, y + 2), tag, fill=GREY, font=f_tag)
     tw = draw.textlength(quarter_label, font=f_q)
-    draw.text((W - pad - tw, y - 2), quarter_label, fill=LIME, font=f_q)
-    y += 36
+    draw.text((W - pad - tw, y), quarter_label, fill=ACCENT, font=f_q)
+    y += 34
 
     draw.text((pad, y), display_sym, fill=WHITE, font=f_sym)
     y_sym = y
     rate_text = f"Rating: {rating}"
-    draw.text((W - pad - draw.textlength(rate_text, font=f_rate), y_sym + 4), rate_text, fill=ORANGE, font=f_rate)
-    y += 42
+    draw.text((W - pad - draw.textlength(rate_text, font=f_rate), y_sym + 8), rate_text, fill=RATING, font=f_rate)
+    y += 46
     if company_line:
-        draw.text((pad, y), company_line, fill=GREY, font=f_sub)
+        draw.text((pad, y), company_line, fill=WHITE, font=f_sub)
     unit_note = "₹ Cr | EPS in ₹"
     draw.text((W - pad - draw.textlength(unit_note, font=f_small), y + 2), unit_note, fill=GREY, font=f_small)
-    y += 36
+    y += 38
 
     # Table
     col_curr = str(payload.get("col_current") or "Curr")
@@ -305,6 +430,7 @@ def render_result_radar_card(
     head_h = 32
 
     draw.rectangle([pad - 8, y, W - pad + 8, y + head_h], fill=TABLE_HEAD)
+    draw.line([pad - 8, y + head_h, W - pad + 8, y + head_h], fill=RULE, width=1)
     for i, htxt in enumerate(headers):
         draw.text((col_x[i], y + 7), htxt, fill=WHITE, font=f_th)
     y += head_h
@@ -326,6 +452,7 @@ def render_result_radar_card(
         draw.text((col_x[4], y + 9), vpq, fill=WHITE, font=f_td)
         draw.text((col_x[5], y + 9), vpy, fill=WHITE, font=f_td)
         y += row_h
+        draw.line([pad - 8, y, W - pad + 8, y], fill=RULE, width=1)
 
     y += 20
 
@@ -337,7 +464,7 @@ def render_result_radar_card(
     pe_s = str(payload.get("footer_fwd_pe") or "—")
 
     block_w = W // 3
-    for i, (label, value, is_lime) in enumerate(
+    for i, (label, value, use_accent) in enumerate(
         [
             ("CMP", cmp_s, True),
             ("FWD EPS", eps_s, False),
@@ -345,21 +472,20 @@ def render_result_radar_card(
         ]
     ):
         bx = i * block_w
-        color = LIME if is_lime else WHITE
+        color = ACCENT if use_accent else WHITE
         draw.text((bx + 24, y + 10), label, fill=GREY, font=f_small)
         draw.text((bx + 24, y + 28), value, fill=color, font=f_foot)
         if i < 2:
-            draw.line([(bx + block_w, y + 12), (bx + block_w, y + fh - 12)], fill=(55, 65, 85), width=1)
+            draw.line([(bx + block_w, y + 12), (bx + block_w, y + fh - 12)], fill=RULE, width=1)
     y += fh + 16
 
     ist = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%b-%Y %H:%M IST")
-    left = "Snapshot from publicly available filings. Verify with official filing."
-    mid = "Source: NSE/BSE filing"
-    draw.text((pad, y), left, fill=GREY, font=f_dis)
-    mw = draw.textlength(mid, font=f_dis)
-    draw.text(((W - mw) // 2, y), mid, fill=GREY, font=f_dis)
+    disclaimer = "Snapshot from publicly available filings. Verify with official filing."
+    source = "Source: NSE/BSE filing"
+    draw.text((pad, y), disclaimer, fill=GREY, font=f_dis)
+    draw.text((pad, y + 14), source, fill=GREY, font=f_dis)
     rw = draw.textlength(ist, font=f_dis)
-    draw.text((W - pad - rw, y), ist, fill=GREY, font=f_dis)
+    draw.text((W - pad - rw, y + 7), ist, fill=GREY, font=f_dis)
 
     try:
         img.save(out_path, format="PNG", optimize=True)
@@ -494,7 +620,7 @@ def process_quarterly_stock(symbol: str, state: dict[str, str], soup: BeautifulS
         return False
 
     out_png = QUARTERLY_CARDS_DIR / f"{sym}_Q_{period_key.replace('-', '_')}.png"
-    if not render_result_radar_card(sym, payload, out_png):
+    if not render_quarterly_card(sym, payload, out_png):
         return False
 
     save_quarterly_summary_md(sym, period_key, pdf_url, payload)

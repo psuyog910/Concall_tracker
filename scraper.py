@@ -2,7 +2,7 @@
 Stock watchlist monitor (Screener.in)
 =====================================
 - Earnings concall transcripts: PDF → Gemini summary → Telegram (PDF or text).
-- Quarterly results: latest Raw PDF link → Gemini structured JSON → ResultRadar-style PNG → Telegram photo.
+- Quarterly results: latest Raw PDF link → Gemini structured JSON → snapshot PNG → Telegram photo.
 
 Daily schedule is configured in `.github/workflows/concall-monitor.yml`.
 """
@@ -386,15 +386,19 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
 
     prompt = prompt_template.format(transcript=transcript_text)
 
-    # Try multiple models as fallback (quota is per-model on free tier)
+    # Try multiple models as fallback (quota is per-model on free tier).
+    # Prefer current Gemini 2.5 IDs; avoid gemini-*-exp-* (rotates / 404s).
+    # Gemma is text-only here (no JSON MIME) — after Gemini attempts.
     models_to_try = [
-        "gemma-4-31b-it",          # Newest Gemma 4 (31B Dense)
-        "gemma-4-26b-a4b-it",      # Newest Gemma 4 (26B MoE)
-        "gemini-2.5-pro-exp-03-25",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-pro",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "gemma-4-31b-it",
+        "gemma-4-26b-a4b-it",
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
     ]
 
     for model_name in models_to_try:
