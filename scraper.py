@@ -367,9 +367,19 @@ def save_summary(symbol: str, date_iso: str, date_raw: str, summary: str) -> Pat
 
 def extract_tone(markdown_text: str) -> str:
     """Extract the overall tone from the markdown summary."""
+    # Pattern 1: Same line (Overall tone: **Bullish**)
     match = re.search(r"Overall tone:\s*\*\*?(.*?)\*\*?", markdown_text, re.IGNORECASE)
     if match:
-        return match.group(1).strip()
+        return match.group(1).split(".")[0].strip() # Clean up leading dots if any
+    
+    # Pattern 2: Header followed by bold text (## Overall Tone ... \n\n **Bullish**)
+    match = re.search(r"## Overall Tone.*?\n+\s*\*\*?(.*?)\*\*?", markdown_text, re.IGNORECASE | re.DOTALL)
+    if match:
+        # Avoid taking the whole paragraph if it's long
+        tone_str = match.group(1).split(".")[0].strip()
+        if len(tone_str) < 50:
+            return tone_str
+            
     return "Neutral"
 
 
@@ -758,8 +768,17 @@ def main() -> None:
             sys.exit(1)
         
         summary_content = test_path.read_text(encoding="utf-8")
+        
+        # Auto-extract date if not explicitly provided or is "Now"
+        date_to_use = args.date
+        if date_to_use.lower() == "now":
+            date_match = re.search(r"\*\*Date:\*\*\s*(.*)", summary_content)
+            if date_match:
+                date_to_use = date_match.group(1).strip()
+                log.info("Detected actual date from file: %s", date_to_use)
+        
         log.info("🚀 Running Test Mode: sending %s to Telegram...", test_path.name)
-        success = send_telegram(args.symbol, args.date, summary_content)
+        success = send_telegram(args.symbol, date_to_use, summary_content)
         if success:
             log.info("✅ Test run successful.")
         else:
