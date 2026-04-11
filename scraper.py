@@ -275,42 +275,47 @@ def extract_pdf_text(pdf_url: str) -> Optional[str]:
 
 # ---------------------------------------------------------------------------
 # Gemini summarisation
-# ---------------------------------------------------------------------------
-
-
-
-
-def clean_summary_output(summary: str) -> str:
-    """Keep only the final user-facing markdown summary."""
+# -------------------------------------------------------------------------def clean_summary_output(summary: str) -> str:
+    """Keep only the final user-facing markdown summary by stripping reasoning and drafts."""
     if not summary:
         return ""
 
-    # 1. Remove reasoning tags (case-insensitive)
+    # 1. First Pass: Remove explicitly tagged reasoning blocks
     for tag in ["think", "thought", "reasoning", "internal"]:
         summary = re.sub(rf"<{tag}>.*?</{tag}>", "", summary, flags=re.DOTALL | re.IGNORECASE).strip()
     
-    # 2. Remove markdown code fences
-    summary = re.sub(r"```(?:markdown|md)?", "", summary, flags=re.IGNORECASE).replace("```", "").strip()
-
-    # 3. Headers that should start the content - expand to any main section
-    main_sections = [
-        "Financial Performance",
-        "Key Highlights",
-        "Growth Drivers",
-        "Management Guidance",
+    # 2. Second Pass: Find the LAST occurrence of the STARTING header.
+    # We specifically look for the beginning of the "Financial Performance" section,
+    # as the model sometimes drafts it in reasoning before giving the final version.
+    start_headers = [
+        r"##\s+📊\s+Financial Performance",
+        r"##\s+Financial Performance",
+        r"##\s+📈\s+Financial Performance",
     ]
     
-    # Create dynamic regex to find any H2 header with these names
-    pattern = r"(##\s+.*?(" + "|".join(main_sections) + r").*?\n)"
-    match = re.search(pattern, summary, re.IGNORECASE)
-    if match:
-        summary = summary[match.start():].strip()
+    pattern = "(" + "|".join(start_headers) + ")"
+    matches = list(re.finditer(pattern, summary, re.IGNORECASE))
+    
+    if matches:
+        # Jump to the start of the LAST occurrence of a "Financial Performance" header
+        summary = summary[matches[-1].start():].strip()
+    else:
+        # Fallback: if Financial Performance is missing, try to find Key Highlights as a start
+        backup_headers = [r"##\s+🔑\s+Key Highlights", r"##\s+Key Highlights"]
+        backup_pattern = "(" + "|".join(backup_headers) + ")"
+        backup_matches = list(re.finditer(backup_pattern, summary, re.IGNORECASE))
+        if backup_matches:
+            summary = summary[backup_matches[-1].start():].strip()
+    
+    # 3. Third Pass: Clean up markdown fences and conversational clutter
+    summary = re.sub(r"```(?:markdown|md)?", "", summary, flags=re.IGNORECASE).replace("```", "").strip()
 
-    # 4. Filter out common drafting/reasoning lines that might appear even after headers
+    # 4. Final Pass: Line-by-line removal of internal drafting signatures
     lines = []
     blocked_keywords = [
         "drafting", "constraint check", "check word count", "hallucination", 
-        "exact figures", "self-check", "internal notes", "reasoning", "thought process"
+        "exact figures", "self-check", "internal notes", "thought process",
+        "output strictly", "starting now", "here is the summary", "final version"
     ]
 
     for line in summary.splitlines():
@@ -319,9 +324,13 @@ def clean_summary_output(summary: str) -> str:
             lines.append(line)
             continue
             
+        # Strip common bullet/header symbols for keyword checking
         normalized = stripped.lower().lstrip("-*•# ").strip()
-        if any(keyword in normalized for keyword in blocked_keywords) and len(normalized) < 100:
+        
+        # Skip lines that are too short to be real info but contain internal keywords
+        if any(keyword in normalized for keyword in blocked_keywords) and len(normalized) < 120:
             continue
+            
         lines.append(line)
 
     return "\n".join(lines).strip()
