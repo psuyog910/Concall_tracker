@@ -1,8 +1,10 @@
 """
-Stock Concall Monitoring Agent
-==============================
-Scrapes Screener.in for new earnings concall transcripts,
-summarizes them with Gemini, and sends Telegram alerts.
+Stock watchlist monitor (Screener.in)
+=====================================
+- Earnings concall transcripts: PDF → Gemini summary → Telegram (PDF or text).
+- Quarterly results: latest Raw PDF link → Gemini structured JSON → ResultRadar-style PNG → Telegram photo.
+
+Daily schedule is configured in `.github/workflows/concall-monitor.yml`.
 """
 
 import argparse
@@ -177,23 +179,29 @@ def _parse_concall_date(raw: str) -> Optional[str]:
         return None
 
 
-def find_latest_transcript(symbol: str) -> Optional[dict]:
+def fetch_screener_soup(symbol: str) -> Optional[BeautifulSoup]:
+    """Download the company page and return parsed HTML, or None on failure."""
+    url = SCREENER_URL.format(symbol=symbol)
+    log.info("Fetching %s", url)
+    try:
+        resp = _get(url)
+    except RuntimeError:
+        log.error("Could not fetch Screener page for %s", symbol)
+        return None
+    return BeautifulSoup(resp.text, "html.parser")
+
+
+def find_latest_transcript(symbol: str, soup: Optional[BeautifulSoup] = None) -> Optional[dict]:
     """
     Scrape Screener.in for the latest concall transcript link and date.
 
     Returns dict with keys: symbol, date, date_raw, pdf_url
     or None if no transcript found.
     """
-    url = SCREENER_URL.format(symbol=symbol)
-    log.info("Fetching %s", url)
-
-    try:
-        resp = _get(url)
-    except RuntimeError:
-        log.error("Could not fetch Screener page for %s", symbol)
-        return None
-
-    soup = BeautifulSoup(resp.text, "html.parser")
+    if soup is None:
+        soup = fetch_screener_soup(symbol)
+        if soup is None:
+            return None
 
     # Strategy: find all <a> tags with class "concall-link" whose text contains "Transcript"
     # or similar variations, and that have an href pointing to a PDF.
@@ -681,7 +689,7 @@ def send_telegram(symbol: str, date_raw: str, summary: str, pdf_url: str = "") -
         log.warning("Telegram credentials not set – skipping notification")
         return False
 
-    alert_key = (symbol.upper().strip(), date_raw.strip())
+    alert_key = ("concall", symbol.upper().strip(), date_raw.strip())
     if alert_key in ALERTS_SENT_THIS_RUN:
         log.warning("Skipping duplicate Telegram alert in same run for %s on %s", symbol, date_raw)
         return True
@@ -783,7 +791,7 @@ def send_telegram(symbol: str, date_raw: str, summary: str, pdf_url: str = "") -
 # Main pipeline
 # ---------------------------------------------------------------------------
 
-def process_stock(symbol: str, state: dict) -> bool:
+def process_stock(symbol: str, state: dict, soup: Optional[BeautifulSoup] = None) -> bool:
     """
     Process a single stock. Returns True if a new concall was found and handled.
     """
@@ -792,7 +800,7 @@ def process_stock(symbol: str, state: dict) -> bool:
     log.info("=" * 60)
 
     # Step 1: Find latest transcript
-    latest = find_latest_transcript(symbol)
+    latest = find_latest_transcript(symbol, soup=soup)
     if latest is None:
         log.info("No transcript available for %s – skipping", symbol)
         return False
@@ -880,7 +888,13 @@ def main() -> None:
             log.error("❌ Test run failed.")
         return
 
-    log.info("🚀 Concall Monitor starting…")
+    from quarterly_monitor import (
+        load_quarterly_state,
+        process_quarterly_stock,
+        save_quarterly_state,
+    )
+
+    log.info("🚀 Watchlist monitor starting (concalls + quarterly)…")
 
     stocks = load_stocks()
     if not stocks:
@@ -888,22 +902,37 @@ def main() -> None:
         sys.exit(1)
 
     state = load_state()
-    new_count = 0
+    qstate = load_quarterly_state()
+    new_concall = 0
+    new_quarterly = 0
 
     for symbol in stocks:
+        soup = fetch_screener_soup(symbol)
         try:
-            if process_stock(symbol, state):
-                new_count += 1
+            if process_stock(symbol, state, soup=soup):
+                new_concall += 1
         except Exception as exc:
-            log.error("Unhandled error for %s: %s", symbol, exc, exc_info=True)
+            log.error("Unhandled concall error for %s: %s", symbol, exc, exc_info=True)
+
+        try:
+            if soup is not None and process_quarterly_stock(symbol, qstate, soup):
+                new_quarterly += 1
+        except Exception as exc:
+            log.error("Unhandled quarterly error for %s: %s", symbol, exc, exc_info=True)
 
         # Be polite to Screener.in
         time.sleep(2)
 
     save_state(state)
+    save_quarterly_state(qstate)
 
     log.info("=" * 60)
-    log.info("✅ Done. %d new concall(s) found out of %d stock(s).", new_count, len(stocks))
+    log.info(
+        "✅ Done. Concalls new: %d | Quarterly new: %d | Stocks: %d",
+        new_concall,
+        new_quarterly,
+        len(stocks),
+    )
     log.info("=" * 60)
 
 

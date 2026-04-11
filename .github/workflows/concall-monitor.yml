@@ -49,6 +49,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Set SEED_QUARTERLY_ONLY=true once (workflow env or repo var) to record current quarters without alerts, then remove.
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.test_file }}" != "" ]; then
             echo "Running manual test for ${{ github.event.inputs.test_file }}..."
@@ -61,7 +62,7 @@ jobs:
         run: |
           git config user.name "Concall Bot"
           git config user.email "bot@concall-monitor.local"
-          git add last_concall.json summaries/
+          git add last_concall.json last_quarterly.json summaries/ quarterly_cards/
           # Only commit if there are changes
           git diff --staged --quiet || git commit -m "🤖 Update concall state and summaries [$(date -u +'%Y-%m-%d %H:%M UTC')]"
           git pull --rebase origin main
