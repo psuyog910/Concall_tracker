@@ -137,18 +137,18 @@ _JSON_ONLY_SUFFIX = (
 )
 
 # (model_id, supports_application_json_mime)
+# Gemma 4 first (user preference); use plain text + JSON suffix — no application/json MIME.
+# Then Gemini flash/pro fallbacks.
 _QUARTERLY_MODEL_TRIALS: tuple[tuple[str, bool], ...] = (
+    ("gemma-4-31b-it", False),
+    ("gemma-4-26b-a4b-it", False),
     ("gemini-2.5-flash", True),
     ("gemini-2.5-flash-lite", True),
     ("gemini-2.5-pro", True),
     ("gemini-1.5-flash", True),
     ("gemini-1.5-pro", True),
-    # Last resort: deprecated for many keys but some projects still have quota
     ("gemini-2.0-flash", True),
     ("gemini-2.0-flash-lite", True),
-    # Gemma: text-only JSON (no MIME) — slow; try after Gemini
-    ("gemma-4-31b-it", False),
-    ("gemma-4-26b-a4b-it", False),
 )
 
 
@@ -277,15 +277,22 @@ def build_quarterly_payload(
             try:
                 response = model.generate_content(prompt)
                 raw = _gemini_response_text(response)
+                
                 if not raw:
-                    _log_prompt_feedback(response)
+                    # Log more detail if possible (finish reason, safety, etc.)
+                    finish_reason = "UNKNOWN"
+                    if hasattr(response, "candidates") and response.candidates:
+                        finish_reason = response.candidates[0].finish_reason.name
+                    
                     log.warning(
-                        "Quarterly model %s attempt %d/%d: empty output "
-                        "(Gemma often needs json_mime=false; or content blocked)",
+                        "Quarterly model %s attempt %d/%d: empty output (reason: %s). "
+                        "Note: Gemma requires json_mime=false.",
                         model_name,
                         attempt,
                         MAX_RETRIES,
+                        finish_reason
                     )
+                    _log_prompt_feedback(response)
                     if attempt < MAX_RETRIES:
                         time.sleep(RETRY_DELAY * attempt)
                     continue
