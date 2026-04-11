@@ -10,6 +10,7 @@ import os
 import re
 import time
 from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -187,6 +188,133 @@ def _log_prompt_feedback(response: Any) -> None:
         pass
 
 
+def _parse_financial_scalar(s: Any) -> Optional[Decimal]:
+    """Parse a cell like '1,234.5', '8.2%', '—' into Decimal (percent stored as the number, e.g. 8.2)."""
+    if s is None:
+        return None
+    t = str(s).strip()
+    if not t or t in ("—", "–", "-", "n/a", "N/A"):
+        return None
+    pct = t.endswith("%")
+    if pct:
+        t = t[:-1].strip()
+    t = t.replace(",", "").replace("₹", "").strip()
+    try:
+        return Decimal(t)
+    except InvalidOperation:
+        return None
+
+
+def _pct_change_vs_prior(curr: Optional[Decimal], prior: Optional[Decimal]) -> Optional[Decimal]:
+    if curr is None or prior is None:
+        return None
+    if prior == 0:
+        return None
+    return ((curr - prior) / abs(prior)) * Decimal(100)
+
+
+def _fmt_signed_pct(d: Decimal) -> str:
+    q = d.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    sign = "+" if q >= 0 else ""
+    return f"{sign}{q}%"
+
+
+def _fmt_pp_or_bps_delta(curr: Optional[Decimal], prior: Optional[Decimal]) -> str:
+    """Difference between two %-style figures; show as bps when near-integer, else pp."""
+    if curr is None or prior is None:
+        return "—"
+    diff_pp = curr - prior
+    if diff_pp == 0:
+        return "0 bps"
+    bps = diff_pp * Decimal(100)
+    bps_r = bps.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    if abs(bps - bps_r) < Decimal("0.01"):
+        sign = "+" if bps_r >= 0 else ""
+        return f"{sign}{int(bps_r)} bps"
+    pp_q = diff_pp.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    sign = "+" if pp_q >= 0 else ""
+    return f"{sign}{pp_q}pp"
+
+
+def _tone_from_pct_change(
+    sense: str,
+    curr: Optional[Decimal],
+    prior: Optional[Decimal],
+) -> str:
+    if curr is None or prior is None:
+        return "neutral"
+    if curr == prior:
+        return "neutral"
+    higher = curr > prior
+    good = (sense == "higher_better" and higher) or (sense == "lower_better" and not higher)
+    return "pos" if good else "neg"
+
+
+def _tone_from_pp_delta(
+    sense: str,
+    curr: Optional[Decimal],
+    prior: Optional[Decimal],
+) -> str:
+    if curr is None or prior is None:
+        return "neutral"
+    diff = curr - prior
+    if diff == 0:
+        return "neutral"
+    higher = diff > 0
+    good = (sense == "higher_better" and higher) or (sense == "lower_better" and not higher)
+    return "pos" if good else "neg"
+
+
+def apply_computed_quarterly_changes(payload: dict[str, Any]) -> None:
+    """
+    Fill qoq / yoy / tones from v_curr, v_prev_q, v_prev_y using Decimal arithmetic.
+    Expects each row to have value_kind and delta_sense (defaults applied if missing).
+    """
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        return
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        kind = str(row.get("value_kind") or "amount").lower()
+        if kind not in ("amount", "percent", "per_share"):
+            kind = "amount"
+        sense = str(row.get("delta_sense") or "higher_better").lower()
+        if sense not in ("higher_better", "lower_better"):
+            sense = "higher_better"
+
+        vc = _parse_financial_scalar(row.get("v_curr"))
+        vq = _parse_financial_scalar(row.get("v_prev_q"))
+        vy = _parse_financial_scalar(row.get("v_prev_y"))
+
+        if kind == "percent":
+            row["qoq"] = _fmt_pp_or_bps_delta(vc, vq)
+            row["yoy"] = _fmt_pp_or_bps_delta(vc, vy)
+            row["qoq_tone"] = _tone_from_pp_delta(sense, vc, vq)
+            row["yoy_tone"] = _tone_from_pp_delta(sense, vc, vy)
+            if row["qoq"] == "—":
+                row["qoq_tone"] = "neutral"
+            if row["yoy"] == "—":
+                row["yoy_tone"] = "neutral"
+            continue
+
+        # amount or per_share: % growth vs prior period
+        qchg = _pct_change_vs_prior(vc, vq)
+        ychg = _pct_change_vs_prior(vc, vy)
+        row["qoq"] = _fmt_signed_pct(qchg) if qchg is not None else "—"
+        row["yoy"] = _fmt_signed_pct(ychg) if ychg is not None else "—"
+        row["qoq_tone"] = (
+            _tone_from_pct_change(sense, vc, vq) if qchg is not None else "neutral"
+        )
+        row["yoy_tone"] = (
+            _tone_from_pct_change(sense, vc, vy) if ychg is not None else "neutral"
+        )
+        if row["qoq"] == "—":
+            row["qoq_tone"] = "neutral"
+        if row["yoy"] == "—":
+            row["yoy_tone"] = "neutral"
+
+
 def _parse_json_flexible(raw: str) -> dict[str, Any]:
     text = (raw or "").strip()
     if not text:
@@ -296,6 +424,7 @@ def build_quarterly_payload(
                         time.sleep(RETRY_DELAY * attempt)
                     continue
                 payload = _parse_json_flexible(raw)
+                apply_computed_quarterly_changes(payload)
                 rows = payload.get("rows")
                 if not isinstance(rows, list) or len(rows) < 3:
                     log.warning("Gemini returned unusable rows; retrying")
@@ -419,11 +548,30 @@ def render_quarterly_card(
     rate_text = f"Rating: {rating}"
     draw.text((W - pad - draw.textlength(rate_text, font=f_rate), y_sym + 8), rate_text, fill=RATING, font=f_rate)
     y += 46
+    y_block_top = y
+    y_line = y_block_top
     if company_line:
-        draw.text((pad, y), company_line, fill=WHITE, font=f_sub)
+        draw.text((pad, y_line), company_line, fill=WHITE, font=f_sub)
+        y_line += 24
+    basis = str(payload.get("financial_basis") or "").strip().lower()
+    basis_note = ""
+    if basis == "consolidated":
+        basis_note = "Consolidated"
+    elif basis == "standalone":
+        basis_note = "Standalone"
+    elif basis == "mixed":
+        basis_note = "Mixed basis"
+    if basis_note:
+        draw.text((pad, y_line), basis_note, fill=GREY, font=f_small)
+        y_line += 16
     unit_note = "₹ Cr | EPS in ₹"
-    draw.text((W - pad - draw.textlength(unit_note, font=f_small), y + 2), unit_note, fill=GREY, font=f_small)
-    y += 38
+    draw.text(
+        (W - pad - draw.textlength(unit_note, font=f_small), y_block_top + 2),
+        unit_note,
+        fill=GREY,
+        font=f_small,
+    )
+    y = max(y_line + 10, y_block_top + 38)
 
     # Table
     col_curr = str(payload.get("col_current") or "Curr")
