@@ -76,6 +76,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("concall-monitor")
+ALERTS_SENT_THIS_RUN: set[tuple[str, str]] = set()
 
 # ---------------------------------------------------------------------------
 # HTTP helpers
@@ -137,11 +138,15 @@ def load_stocks() -> list[str]:
     if not STOCKS_FILE.exists():
         log.error("stocks.txt not found at %s", STOCKS_FILE)
         return []
-    symbols = [
+    raw_symbols = [
         line.strip().upper()
         for line in STOCKS_FILE.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
+    symbols = list(dict.fromkeys(raw_symbols))
+    duplicate_count = len(raw_symbols) - len(symbols)
+    if duplicate_count:
+        log.warning("Removed %d duplicate stock symbol(s) from watchlist", duplicate_count)
     log.info("Loaded %d stock(s): %s", len(symbols), ", ".join(symbols))
     return symbols
 
@@ -275,6 +280,53 @@ def extract_pdf_text(pdf_url: str) -> Optional[str]:
 
 
 
+def clean_summary_output(summary: str) -> str:
+    """Keep only the final user-facing markdown summary."""
+    if not summary:
+        return ""
+
+    # 1. Remove reasoning tags (case-insensitive)
+    for tag in ["think", "thought", "reasoning", "internal"]:
+        summary = re.sub(rf"<{tag}>.*?</{tag}>", "", summary, flags=re.DOTALL | re.IGNORECASE).strip()
+    
+    # 2. Remove markdown code fences
+    summary = re.sub(r"```(?:markdown|md)?", "", summary, flags=re.IGNORECASE).replace("```", "").strip()
+
+    # 3. Headers that should start the content - expand to any main section
+    main_sections = [
+        "Financial Performance",
+        "Key Highlights",
+        "Growth Drivers",
+        "Management Guidance",
+    ]
+    
+    # Create dynamic regex to find any H2 header with these names
+    pattern = r"(##\s+.*?(" + "|".join(main_sections) + r").*?\n)"
+    match = re.search(pattern, summary, re.IGNORECASE)
+    if match:
+        summary = summary[match.start():].strip()
+
+    # 4. Filter out common drafting/reasoning lines that might appear even after headers
+    lines = []
+    blocked_keywords = [
+        "drafting", "constraint check", "check word count", "hallucination", 
+        "exact figures", "self-check", "internal notes", "reasoning", "thought process"
+    ]
+
+    for line in summary.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            lines.append(line)
+            continue
+            
+        normalized = stripped.lower().lstrip("-*•# ").strip()
+        if any(keyword in normalized for keyword in blocked_keywords) and len(normalized) < 100:
+            continue
+        lines.append(line)
+
+    return "\n".join(lines).strip()
+
+
 def summarise_transcript(transcript_text: str) -> Optional[str]:
     """Send transcript to Gemini and return the summary."""
     if not GEMINI_API_KEY:
@@ -300,8 +352,6 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
 
     # Try multiple models as fallback (quota is per-model on free tier)
     models_to_try = [
-        "gemma-4-31b-it",          # Newest Gemma 4 (31B Dense)
-        "gemma-4-26b-a4b-it",      # Newest Gemma 4 (26B MoE)
         "gemini-2.5-pro-exp-03-25",
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
@@ -318,19 +368,7 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 response = model.generate_content(prompt)
-                summary = response.text
-                
-                # Strip out <think> tags if model includes reasoning
-                summary = re.sub(r"<think>.*?</think>", "", summary, flags=re.DOTALL).strip()
-                
-                # Strip out any preamble before the first expected header
-                # We check for exact match of the first section to ensure we don't include prompt leaking or drafting text
-                financial_header = "## 📊 Financial Performance"
-                if financial_header in summary:
-                    summary = financial_header + summary.split(financial_header, 1)[1]
-                elif "## 📊" in summary:
-                    # Fallback just in case
-                    summary = "## 📊" + summary.split("## 📊", 1)[1]
+                summary = clean_summary_output(response.text)
                 
                 log.info("Gemini summary generated with %s – %d chars", model_name, len(summary))
                 return summary
@@ -565,7 +603,8 @@ def generate_summary_pdf(symbol: str, date_raw: str, markdown_text: str) -> Opti
     </html>
     """
 
-    output_path = SUMMARIES_DIR / f"{symbol}_Summary.pdf"
+    date_slug = date_raw.replace(" ", "_").replace(",", "") if date_raw else "Latest"
+    output_path = SUMMARIES_DIR / f"{symbol}_{date_slug}_Summary.pdf"
     
     try:
         with sync_playwright() as p:
@@ -612,6 +651,11 @@ def send_telegram(symbol: str, date_raw: str, summary: str, pdf_url: str = "") -
         log.warning("Telegram credentials not set – skipping notification")
         return False
 
+    alert_key = (symbol.upper().strip(), date_raw.strip())
+    if alert_key in ALERTS_SENT_THIS_RUN:
+        log.warning("Skipping duplicate Telegram alert in same run for %s on %s", symbol, date_raw)
+        return True
+
     # Metadata for caption
     tone = extract_tone(summary)
     
@@ -638,10 +682,6 @@ def send_telegram(symbol: str, date_raw: str, summary: str, pdf_url: str = "") -
             f"🔗 <a href='{pdf_url or f'https://www.screener.in/company/{symbol}/'}'>View Concall Transcript</a>"
         )
         
-        files = {
-            "document": open(pdf_path, "rb")
-        }
-            
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
             "caption": caption,
@@ -650,8 +690,15 @@ def send_telegram(symbol: str, date_raw: str, summary: str, pdf_url: str = "") -
         
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                resp = requests.post(url, data=payload, files=files, timeout=40)
+                with open(pdf_path, "rb") as pdf_file:
+                    resp = requests.post(
+                        url,
+                        data=payload,
+                        files={"document": pdf_file},
+                        timeout=40,
+                    )
                 if resp.status_code == 200:
+                    ALERTS_SENT_THIS_RUN.add(alert_key)
                     log.info("Telegram PDF Document sent for %s", symbol)
                     return True
                 else:
@@ -692,6 +739,7 @@ def send_telegram(symbol: str, date_raw: str, summary: str, pdf_url: str = "") -
             try:
                 resp = requests.post(url, json=payload, timeout=15)
                 if resp.status_code == 200:
+                    ALERTS_SENT_THIS_RUN.add(alert_key)
                     log.info("Telegram text alert sent for %s", symbol)
                     return True
                 log.warning("Telegram attempt %d/%d – status %d", attempt, MAX_RETRIES, resp.status_code)

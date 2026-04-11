@@ -1,8 +1,6 @@
 name: Concall Monitor
 
 on:
-  push:
-    branches: [ main ]
   schedule:
     # Daily at 9:00 AM IST (3:30 AM UTC)
     - cron: '30 3 * * *'
@@ -23,6 +21,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: concall-monitor
+  cancel-in-progress: false
 
 jobs:
   monitor:
