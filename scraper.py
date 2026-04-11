@@ -387,10 +387,10 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
     prompt = prompt_template.format(transcript=transcript_text)
 
     # Try multiple models as fallback (quota is per-model on free tier).
-    # Gemma 4 first (user preference), then Gemini 2.5 / 1.5 / 2.0; avoid gemini-*-exp-* (rotates / 404s).
+    # Prioritize valid Gemma 2 models as requested, followed by Gemini 2.5 / 1.5 / 2.0.
     models_to_try = [
-        "gemma-4-31b-it",
-        "gemma-4-26b-a4b-it",
+        "models/gemma-2-27b-it",
+        "models/gemma-2-9b-it",
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
         "gemini-2.5-pro",
