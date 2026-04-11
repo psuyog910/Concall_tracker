@@ -14,10 +14,15 @@ STRICT RULES:
 
 
 ## 📊 Financial Performance
-- **Revenue**: [exact figure] | YoY: [+% / -%] | QoQ: [+% / -%]
-- **PAT**: [exact figure] | YoY: [+% / -%] | QoQ: [+% / -%]
-- **EBITDA Margin**: [current %] | YoY change: [+% / -%] | QoQ change: [+% / -%]
-- **Other key metrics** (if discussed): Gross Margin, Operating Profit, Net Debt, Working Capital, Cash Flow, etc. with exact figures and % changes.
+Start with a small, clear markdown table for key metrics. If a metric is not discussed, omit the row or write "N/A".
+| Metric | Figure | YoY | QoQ |
+|---|---|---|---|
+| **Revenue** | [exact figure] | [+% / -%] | [+% / -%] |
+| **PAT** | [exact figure] | [+% / -%] | [+% / -%] |
+| **EBITDA Margin** | [current %] | [+% / -%] | [+% / -%] |
+| **[Other Metric]** | [exact figure] | [+% / -%] | [+% / -%] |
+
+Add other key metrics like Gross Margin, Operating Profit, Net Debt, Working Capital, Cash Flow, etc. to the table if discussed.
 
 ## 🔑 Key Highlights
 • Short bullets of the most important operational/strategic updates from the call.

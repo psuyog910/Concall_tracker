@@ -319,6 +319,10 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
             try:
                 response = model.generate_content(prompt)
                 summary = response.text
+                
+                # Strip out <think> tags if model includes reasoning
+                summary = re.sub(r"<think>.*?</think>", "", summary, flags=re.DOTALL).strip()
+                
                 log.info("Gemini summary generated with %s – %d chars", model_name, len(summary))
                 return summary
             except Exception as exc:
@@ -369,40 +373,18 @@ def extract_tone(markdown_text: str) -> str:
     return "Neutral"
 
 
-def split_summary(markdown_text: str) -> list[str]:
-    """Split markdown summary into two logical parts at a major header."""
-    # Preferred split points (headers)
-    split_headers = [
-        "## 🏗️ Capex",
-        "## ⚠️ Risks",
-        "## 🏗️ Capex / Expansion / Order Book",
-        "## ⚠️ Risks, Concerns & Red Flags"
-    ]
-    
-    for header in split_headers:
-        if header in markdown_text:
-            parts = markdown_text.split(header, 1)
-            return [parts[0].strip(), (header + "\n" + parts[1]).strip()]
-            
-    # Fallback to middle-ish split if no header found
-    lines = markdown_text.splitlines()
-    mid = len(lines) // 2
-    return ["\n".join(lines[:mid]), "\n".join(lines[mid:])]
-
-
-def generate_summary_image(symbol: str, date_raw: str, markdown_text: str, part_num: int = 1) -> Optional[Path]:
-    """Render the markdown summary to a sleek dark-themed PNG image."""
+def generate_summary_pdf(symbol: str, date_raw: str, markdown_text: str) -> Optional[Path]:
+    """Render the markdown summary to a sleek dark-themed PDF document."""
     if not markdown or not sync_playwright:
-        log.warning("markdown or playwright not installed – skipping image generation")
+        log.warning("markdown or playwright not installed – skipping PDF generation")
         return None
 
-    log.info("Generating sleek PNG summary Part %d for %s...", part_num, symbol)
+    log.info("Generating sleek PDF summary for %s...", symbol)
     
     # Convert MD to HTML
-    content_html = markdown.markdown(markdown_text, extensions=['extra', 'sane_lists'])
+    content_html = markdown.markdown(markdown_text, extensions=['extra', 'sane_lists', 'tables'])
     
     # Premium Sleek/Dark Template
-    part_indicator = f"Part {part_num}" if part_num > 1 else "Executive Summary"
     html_template = f"""
     <!DOCTYPE html>
     <html>
@@ -413,7 +395,7 @@ def generate_summary_image(symbol: str, date_raw: str, markdown_text: str, part_
             
             :root {{
                 --bg: #0f172a;
-                --card: rgba(30, 41, 59, 0.7);
+                --card: #1e293b;
                 --accent: #38bdf8;
                 --text: #f1f5f9;
                 --text-muted: #94a3b8;
@@ -425,26 +407,23 @@ def generate_summary_image(symbol: str, date_raw: str, markdown_text: str, part_
                 color: var(--text);
                 font-family: 'Inter', -apple-system, sans-serif;
                 margin: 0;
-                padding: 40px;
-                display: flex;
-                justify-content: center;
+                padding: 20px;
                 line-height: 1.6;
+                font-size: 16px;
             }}
             
             .container {{
-                max-width: 800px;
+                max-width: 100%;
                 background: var(--card);
-                backdrop-filter: blur(12px);
-                border: 1px solid var(--border);
-                border-radius: 24px;
-                padding: 50px;
-                box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+                border-radius: 12px;
+                padding: 30px;
+                box-sizing: border-box;
             }}
             
             .header {{
                 border-bottom: 1px solid var(--border);
-                margin-bottom: 30px;
-                padding-bottom: 20px;
+                margin-bottom: 20px;
+                padding-bottom: 15px;
             }}
             
             .badge {{
@@ -462,7 +441,7 @@ def generate_summary_image(symbol: str, date_raw: str, markdown_text: str, part_
             
             h1 {{
                 margin: 0;
-                font-size: 32px;
+                font-size: 28px;
                 font-weight: 700;
                 background: linear-gradient(to right, #fff, #94a3b8);
                 -webkit-background-clip: text;
@@ -477,8 +456,8 @@ def generate_summary_image(symbol: str, date_raw: str, markdown_text: str, part_
             
             h2 {{
                 color: var(--accent);
-                font-size: 18px;
-                margin-top: 35px;
+                font-size: 20px;
+                margin-top: 30px;
                 margin-bottom: 15px;
                 display: flex;
                 align-items: center;
@@ -515,6 +494,25 @@ def generate_summary_image(symbol: str, date_raw: str, markdown_text: str, part_
                 margin: 30px 0;
             }}
 
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin: 20px 0;
+                font-size: 15px;
+            }}
+
+            th, td {{
+                padding: 12px;
+                text-align: left;
+                border-bottom: 1px solid var(--border);
+            }}
+
+            th {{
+                background: rgba(255, 255, 255, 0.05);
+                color: var(--accent);
+                font-weight: 600;
+            }}
+
             .footer-watermark {{
                 margin-top: 40px;
                 text-align: center;
@@ -527,7 +525,7 @@ def generate_summary_image(symbol: str, date_raw: str, markdown_text: str, part_
     <body>
         <div class="container">
             <div class="header">
-                <div class="badge">Equity Research Summary • {part_indicator}</div>
+                <div class="badge">Equity Research Summary</div>
                 <h1>{symbol}</h1>
                 <div class="meta">Earnings Call Transcript • {date_raw}</div>
             </div>
@@ -544,28 +542,25 @@ def generate_summary_image(symbol: str, date_raw: str, markdown_text: str, part_
     </html>
     """
 
-    output_path = SUMMARIES_DIR / f"{symbol}_P{part_num}.png"
+    output_path = SUMMARIES_DIR / f"{symbol}_Summary.pdf"
     
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch()
-            page = browser.new_page(viewport={'width': 900, 'height': 1200})
+            # Set a narrower viewport for better mobile readability when converted to PDF
+            page = browser.new_page(viewport={'width': 800, 'height': 1200})
             page.set_content(html_template)
             # Wait for any webfonts to load
             page.wait_for_timeout(1000)
             
-            # Clip to the container to avoid huge whitespace
-            container = page.query_selector(".container")
-            if container:
-                container.screenshot(path=str(output_path), animations="disabled")
-            else:
-                page.screenshot(path=str(output_path), full_page=True)
+            # Generate PDF
+            page.pdf(path=str(output_path), print_background=True, width="800px", margin={"top": "0px", "bottom": "0px", "left": "0px", "right": "0px"})
                 
             browser.close()
-            log.info("Image Part %d saved to %s", part_num, output_path)
+            log.info("PDF saved to %s", output_path)
             return output_path
     except Exception as exc:
-        log.error("Failed to generate image Part %d: %s", part_num, exc)
+        log.error("Failed to generate PDF: %s", exc)
         return None
 
 
@@ -589,7 +584,7 @@ def format_telegram_html(text: str) -> str:
     return text.strip()
 
 def send_telegram(symbol: str, date_raw: str, summary: str) -> bool:
-    """Send a Telegram notification (text or 2-part PNG gallery fallback)."""
+    """Send a Telegram notification (text or PDF fallback)."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         log.warning("Telegram credentials not set – skipping notification")
         return False
@@ -597,25 +592,21 @@ def send_telegram(symbol: str, date_raw: str, summary: str) -> bool:
     # Metadata for caption
     tone = extract_tone(summary)
     
-    # Decide if we need an image (length-based)
-    use_image = len(summary) > 3000
-    image_paths = []
+    # Decide if we need a PDF (length-based)
+    use_pdf = len(summary) > 3000
+    pdf_path = None
     
-    if use_image:
-        log.info("Summary too long (%d chars) – switching to 2-part image gallery", len(summary))
-        parts = split_summary(summary)
-        for i, part_content in enumerate(parts, 1):
-            path = generate_summary_image(symbol, date_raw, part_content, i)
-            if path:
-                image_paths.append(path)
+    if use_pdf:
+        log.info("Summary too long (%d chars) – switching to PDF document", len(summary))
+        pdf_path = generate_summary_pdf(symbol, date_raw, summary)
         
-        if not image_paths:
-            log.warning("Image generation failed, falling back to truncated text")
-            use_image = False
+        if not pdf_path:
+            log.warning("PDF generation failed, falling back to truncated text")
+            use_pdf = False
 
-    if use_image and image_paths:
-        # Send Media Group (Gallery)
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMediaGroup"
+    if use_pdf and pdf_path:
+        # Send Document (PDF)
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument"
         
         caption = (
             f"🏢 <b>Stock:</b> <code>{symbol}</code>\n"
@@ -624,33 +615,26 @@ def send_telegram(symbol: str, date_raw: str, summary: str) -> bool:
             f"🔗 <a href='https://www.screener.in/company/{symbol}/'>View on Screener</a>"
         )
         
-        media = []
-        files = {}
-        for i, path in enumerate(image_paths):
-            key = f"photo{i}"
-            media.append({
-                "type": "photo",
-                "media": f"attach://{key}",
-                "caption": caption if i == 0 else "", # Caption on the first image
-                "parse_mode": "HTML"
-            })
-            files[key] = open(path, "rb")
+        files = {
+            "document": open(pdf_path, "rb")
+        }
             
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
-            "media": json.dumps(media)
+            "caption": caption,
+            "parse_mode": "HTML"
         }
         
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 resp = requests.post(url, data=payload, files=files, timeout=40)
                 if resp.status_code == 200:
-                    log.info("Telegram Media Group sent for %s", symbol)
+                    log.info("Telegram PDF Document sent for %s", symbol)
                     return True
                 else:
-                    log.warning("Telegram SG Group attempt %d/%d – status %d: %s", attempt, MAX_RETRIES, resp.status_code, resp.text)
+                    log.warning("Telegram PDF attempt %d/%d – status %d: %s", attempt, MAX_RETRIES, resp.status_code, resp.text)
             except requests.RequestException as exc:
-                log.warning("Telegram SG Group attempt %d/%d failed: %s", attempt, MAX_RETRIES, exc)
+                log.warning("Telegram PDF attempt %d/%d failed: %s", attempt, MAX_RETRIES, exc)
             time.sleep(RETRY_DELAY)
         return False
 
@@ -658,7 +642,7 @@ def send_telegram(symbol: str, date_raw: str, summary: str) -> bool:
         # Send Text Message (Original logic)
         msg_suffix = ""
         if len(summary) > 3000:
-             msg_suffix = "\n\n... [Truncated - PNG Generation Failed]" if use_image else "\n\n... [Truncated]"
+             msg_suffix = "\n\n... [Truncated - PDF Generation Failed]" if use_pdf else "\n\n... [Truncated]"
         
         short_summary = summary[:3000] + msg_suffix
         html_summary = format_telegram_html(short_summary)
