@@ -323,6 +323,15 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
                 # Strip out <think> tags if model includes reasoning
                 summary = re.sub(r"<think>.*?</think>", "", summary, flags=re.DOTALL).strip()
                 
+                # Strip out any preamble before the first expected header
+                # We check for exact match of the first section to ensure we don't include prompt leaking or drafting text
+                financial_header = "## 📊 Financial Performance"
+                if financial_header in summary:
+                    summary = financial_header + summary.split(financial_header, 1)[1]
+                elif "## 📊" in summary:
+                    # Fallback just in case
+                    summary = "## 📊" + summary.split("## 📊", 1)[1]
+                
                 log.info("Gemini summary generated with %s – %d chars", model_name, len(summary))
                 return summary
             except Exception as exc:
@@ -440,18 +449,18 @@ def generate_summary_pdf(symbol: str, date_raw: str, markdown_text: str) -> Opti
                 display: inline-block;
                 background: rgba(56, 189, 248, 0.1);
                 color: var(--accent);
-                padding: 4px 12px;
+                padding: 6px 14px;
                 border-radius: 99px;
-                font-size: 12px;
+                font-size: 13px;
                 font-weight: 600;
                 text-transform: uppercase;
                 letter-spacing: 0.05em;
-                margin-bottom: 12px;
+                margin-bottom: 15px;
             }}
             
             h1 {{
                 margin: 0;
-                font-size: 28px;
+                font-size: 30px;
                 font-weight: 700;
                 background: linear-gradient(to right, #fff, #94a3b8);
                 -webkit-background-clip: text;
@@ -466,9 +475,9 @@ def generate_summary_pdf(symbol: str, date_raw: str, markdown_text: str) -> Opti
             
             h2 {{
                 color: var(--accent);
-                font-size: 20px;
-                margin-top: 30px;
-                margin-bottom: 15px;
+                font-size: 22px;
+                margin-top: 35px;
+                margin-bottom: 20px;
                 display: flex;
                 align-items: center;
                 gap: 10px;
@@ -477,12 +486,13 @@ def generate_summary_pdf(symbol: str, date_raw: str, markdown_text: str) -> Opti
             }}
             
             ul {{
-                padding-left: 20px;
+                padding-left: 24px;
                 margin: 0;
             }}
             
             li {{
-                margin-bottom: 8px;
+                margin-bottom: 12px;
+                padding-left: 4px;
             }}
             
             strong {{
@@ -507,18 +517,21 @@ def generate_summary_pdf(symbol: str, date_raw: str, markdown_text: str) -> Opti
             table {{
                 width: 100%;
                 border-collapse: collapse;
-                margin: 20px 0;
+                margin: 25px 0;
                 font-size: 15px;
+                background: rgba(255, 255, 255, 0.02);
+                border-radius: 8px;
+                overflow: hidden;
             }}
 
             th, td {{
-                padding: 12px;
+                padding: 14px 16px;
                 text-align: left;
                 border-bottom: 1px solid var(--border);
             }}
 
             th {{
-                background: rgba(255, 255, 255, 0.05);
+                background: rgba(56, 189, 248, 0.08);
                 color: var(--accent);
                 font-weight: 600;
             }}
