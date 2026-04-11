@@ -387,16 +387,15 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
     prompt = prompt_template.format(transcript=transcript_text)
 
     # Try multiple models as fallback (quota is per-model on free tier).
-    # Prefer current Gemini 2.5 IDs; avoid gemini-*-exp-* (rotates / 404s).
-    # Gemma is text-only here (no JSON MIME) — after Gemini attempts.
+    # Gemma 4 first (user preference), then Gemini 2.5 / 1.5 / 2.0; avoid gemini-*-exp-* (rotates / 404s).
     models_to_try = [
+        "gemma-4-31b-it",
+        "gemma-4-26b-a4b-it",
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
         "gemini-2.5-pro",
         "gemini-1.5-flash",
         "gemini-1.5-pro",
-        "gemma-4-31b-it",
-        "gemma-4-26b-a4b-it",
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
     ]

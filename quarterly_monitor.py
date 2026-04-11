@@ -128,8 +128,8 @@ def page_text_snippet(soup: BeautifulSoup, limit: int = 10000) -> str:
 # `response_mime_type: application/json`; the API often returns an empty body,
 # which surfaces as json.loads(""). Use plain text + "JSON only" suffix for Gemma.
 #
-# Deprecated 2.0 Flash* often shows free-tier quota limit 0 — prefer 2.5 family IDs
-# from https://ai.google.dev/gemini-api/docs/models
+# Order: Gemma 4 first, then Gemini (2.5, 1.5, 2.0). Deprecated 2.0 Flash* may show quota 0.
+# Model IDs: https://ai.google.dev/gemini-api/docs/models
 #
 _JSON_ONLY_SUFFIX = (
     "\n\nOutput: reply with exactly one JSON object and nothing else "
