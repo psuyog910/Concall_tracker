@@ -378,15 +378,18 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
 
     prompt = prompt_template.format(transcript=transcript_text)
 
-    # Try multiple models as fallback (quota is per-model on free tier)
+    # Try multiple models as fallback (quota is per-model on free tier).
+    # Gemma 4 first, then Gemini 2.5 / 1.5 / 2.0; avoid gemini-*-exp-* (rotates / 404s).
     models_to_try = [
-        "gemma-4-31b-it",          # Newest Gemma 4 (31B Dense)
-        "gemma-4-26b-a4b-it",      # Newest Gemma 4 (26B MoE)
-        "gemini-2.5-pro-exp-03-25",
+        "gemma-4-31b-it",
+        "gemma-4-26b-a4b-it",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-pro",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
     ]
 
     for model_name in models_to_try:
