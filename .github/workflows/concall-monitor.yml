@@ -16,6 +16,10 @@ on:
         description: 'Symbol for the test'
         required: false
         default: 'TEST_RUN'
+      test_pdf_url:
+        description: 'Mock PDF URL for the test'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -46,7 +50,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.test_file }}" != "" ]; then
             echo "Running manual test for ${{ github.event.inputs.test_file }}..."
-            python scraper.py --test "${{ github.event.inputs.test_file }}" --symbol "${{ github.event.inputs.test_symbol }}"
+            python scraper.py --test "${{ github.event.inputs.test_file }}" --symbol "${{ github.event.inputs.test_symbol }}" --pdf_url "${{ github.event.inputs.test_pdf_url }}"
           else
             python scraper.py
           fi

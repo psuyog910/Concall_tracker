@@ -593,7 +593,7 @@ def format_telegram_html(text: str) -> str:
     
     return text.strip()
 
-def send_telegram(symbol: str, date_raw: str, summary: str) -> bool:
+def send_telegram(symbol: str, date_raw: str, summary: str, pdf_url: str = "") -> bool:
     """Send a Telegram notification (text or PDF fallback)."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         log.warning("Telegram credentials not set – skipping notification")
@@ -622,7 +622,7 @@ def send_telegram(symbol: str, date_raw: str, summary: str) -> bool:
             f"🏢 <b>Stock:</b> <code>{symbol}</code>\n"
             f"📅 <b>Date:</b> {date_raw}\n"
             f"🎯 <b>Tone:</b> {tone}\n"
-            f"🔗 <a href='https://www.screener.in/company/{symbol}/'>View on Screener</a>"
+            f"🔗 <a href='{pdf_url or f'https://www.screener.in/company/{symbol}/'}'>View Concall Transcript</a>"
         )
         
         files = {
@@ -664,7 +664,7 @@ def send_telegram(symbol: str, date_raw: str, summary: str) -> bool:
             f"🎯 <b>Tone:</b> {tone}\n\n"
             f"🤖 <b>AI Summary:</b>\n"
             f"<blockquote expandable>{html_summary}</blockquote>\n\n"
-            f"🔗 <a href='https://www.screener.in/company/{symbol}/'>View Full Details on Screener</a>"
+            f"🔗 <a href='{pdf_url or f'https://www.screener.in/company/{symbol}/'}'>View Concall Transcript</a>"
         )
 
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -742,7 +742,7 @@ def process_stock(symbol: str, state: dict) -> bool:
 
     # Step 6: Send Telegram alert (if not in silent mode)
     if not SILENT_MODE:
-        send_telegram(symbol, latest["date_raw"], summary)
+        send_telegram(symbol, latest["date_raw"], summary, pdf_url=latest["pdf_url"])
     else:
         log.info("Silent mode is ON: skipping Telegram alert for %s", symbol)
 
@@ -759,6 +759,7 @@ def main() -> None:
     parser.add_argument("--test", type=str, help="Path to a markdown file to test sending a summary")
     parser.add_argument("--symbol", type=str, default="TEST_STOCK", help="Symbol for the test run")
     parser.add_argument("--date", type=str, default="Now", help="Date for the test run")
+    parser.add_argument("--pdf_url", type=str, default="", help="PDF URL for the test run")
     args = parser.parse_args()
 
     if args.test:
@@ -778,7 +779,7 @@ def main() -> None:
                 log.info("Detected actual date from file: %s", date_to_use)
         
         log.info("🚀 Running Test Mode: sending %s to Telegram...", test_path.name)
-        success = send_telegram(args.symbol, date_to_use, summary_content)
+        success = send_telegram(args.symbol, date_to_use, summary_content, pdf_url=args.pdf_url)
         if success:
             log.info("✅ Test run successful.")
         else:
