@@ -298,7 +298,9 @@ def extract_pdf_text(pdf_url: str) -> Optional[str]:
 
 # ---------------------------------------------------------------------------
 # Gemini summarisation
-# -------------------------------------------------------------------------def clean_summary_output(summary: str) -> str:
+# ---------------------------------------------------------------------------
+
+def clean_summary_output(summary: str) -> str:
     """Keep only the final user-facing markdown summary by stripping reasoning and drafts."""
     if not summary:
         return ""
