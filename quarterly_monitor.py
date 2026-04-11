@@ -157,9 +157,11 @@ def build_quarterly_payload(
 
     genai.configure(api_key=GEMINI_API_KEY)
     models_to_try = [
+        "gemma-4-31b-it",          # Newest Gemma 4 (31B Dense)
+        "gemma-4-26b-a4b-it",      # Newest Gemma 4 (26B MoE)
+        "gemini-2.5-pro-exp-03-25",
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
-        "gemini-2.5-pro-exp-03-25",
         "gemini-1.5-pro",
         "gemini-1.5-flash",
     ]
