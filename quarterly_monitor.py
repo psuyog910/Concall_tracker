@@ -128,7 +128,7 @@ def page_text_snippet(soup: BeautifulSoup, limit: int = 10000) -> str:
 # `response_mime_type: application/json`; the API often returns an empty body,
 # which surfaces as json.loads(""). Use plain text + "JSON only" suffix for Gemma.
 #
-# Order: Gemma 4 first, then Gemini (2.5, 1.5, 2.0). Deprecated 2.0 Flash* may show quota 0.
+# Order: Gemini first for JSON, then Gemma 4. Deprecated 2.0 Flash* may show quota 0.
 # Model IDs: https://ai.google.dev/gemini-api/docs/models
 #
 _JSON_ONLY_SUFFIX = (
@@ -137,11 +137,8 @@ _JSON_ONLY_SUFFIX = (
 )
 
 # (model_id, supports_application_json_mime)
-# Gemma 4 first (user preference); use plain text + JSON suffix — no application/json MIME.
-# Then Gemini flash/pro fallbacks.
+# Prioritize Gemini (structured JSON MIME works well); Gemma 4 last as fallback (text + JSON suffix only).
 _QUARTERLY_MODEL_TRIALS: tuple[tuple[str, bool], ...] = (
-    ("gemma-4-31b-it", False),
-    ("gemma-4-26b-a4b-it", False),
     ("gemini-2.5-flash", True),
     ("gemini-2.5-flash-lite", True),
     ("gemini-2.5-pro", True),
@@ -149,6 +146,8 @@ _QUARTERLY_MODEL_TRIALS: tuple[tuple[str, bool], ...] = (
     ("gemini-1.5-pro", True),
     ("gemini-2.0-flash", True),
     ("gemini-2.0-flash-lite", True),
+    ("gemma-4-31b-it", False),
+    ("gemma-4-26b-a4b-it", False),
 )
 
 
