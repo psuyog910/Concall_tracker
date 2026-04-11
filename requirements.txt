@@ -2,6 +2,6 @@ requests
 beautifulsoup4
 google-generativeai
 python-dateutil
-pypdf
+pdfplumber
 markdown
 playwright

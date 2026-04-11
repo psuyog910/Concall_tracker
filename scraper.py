@@ -23,9 +23,9 @@ from bs4 import BeautifulSoup
 from dateutil import parser as dateparser
 
 try:
-    import pypdf
+    import pdfplumber
 except ImportError:
-    pypdf = None
+    pdfplumber = None
     
 try:
     import markdown
@@ -121,12 +121,19 @@ def load_state() -> dict:
 
 
 def save_state(state: dict) -> None:
-    """Persist state to JSON."""
-    STATE_FILE.write_text(
-        json.dumps(state, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    log.info("State saved → %s", STATE_FILE)
+    """Persist state to JSON atomically to prevent corruption."""
+    temp_file = STATE_FILE.with_suffix('.json.tmp')
+    try:
+        temp_file.write_text(
+            json.dumps(state, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        temp_file.replace(STATE_FILE)
+        log.info("State saved atomically → %s", STATE_FILE)
+    except Exception as exc:
+        log.error("Failed to save state: %s", exc)
+        if temp_file.exists():
+            temp_file.unlink()
 
 
 # ---------------------------------------------------------------------------
@@ -188,13 +195,15 @@ def find_latest_transcript(symbol: str) -> Optional[dict]:
 
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    # Strategy: find all <a> tags with class "concall-link" whose text is "Transcript"
-    # and that have an href pointing to a PDF.
+    # Strategy: find all <a> tags with class "concall-link" whose text contains "Transcript"
+    # or similar variations, and that have an href pointing to a PDF.
     transcript_links = []
+    
+    valid_transcript_keywords = ["transcript", "call transcript", "earnings transcript"]
 
     for a_tag in soup.find_all("a", class_="concall-link"):
-        text = a_tag.get_text(strip=True)
-        if text.lower() != "transcript":
+        text = a_tag.get_text(strip=True).lower()
+        if not any(keyword in text for keyword in valid_transcript_keywords):
             continue
         href = a_tag.get("href", "")
         if not href:
@@ -210,11 +219,12 @@ def find_latest_transcript(symbol: str) -> Optional[dict]:
         parent_text = parent.get_text(" ", strip=True)
         # Match patterns like "Feb 2026", "Nov 2025", "Jan 2023"
         date_match = re.search(
-            r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}",
+            r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}",
             parent_text,
+            re.IGNORECASE
         )
         if date_match:
-            date_raw = date_match.group(0)
+            date_raw = date_match.group(0).title() # Normalize casing
             date_iso = _parse_concall_date(date_raw)
         else:
             date_raw = ""
@@ -246,7 +256,7 @@ def find_latest_transcript(symbol: str) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 def extract_pdf_text(pdf_url: str) -> Optional[str]:
-    """Download a PDF and extract its text content."""
+    """Download a PDF and extract its text content using pdfplumber for better table structure."""
     log.info("Downloading PDF: %s", pdf_url)
     try:
         resp = _get(pdf_url)
@@ -254,19 +264,32 @@ def extract_pdf_text(pdf_url: str) -> Optional[str]:
         log.error("Failed to download PDF: %s", pdf_url)
         return None
 
-    if pypdf is None:
-        log.error("pypdf not installed – cannot extract PDF text")
+    if pdfplumber is None:
+        log.error("pdfplumber not installed – cannot extract PDF text")
         return None
 
     try:
-        reader = pypdf.PdfReader(io.BytesIO(resp.content))
-        pages_text = []
-        for page in reader.pages:
-            text = page.extract_text()
-            if text:
-                pages_text.append(text)
+        with pdfplumber.open(io.BytesIO(resp.content)) as pdf:
+            pages_text = []
+            for page in pdf.pages:
+                # Extract plain text
+                text = page.extract_text()
+                if text:
+                    pages_text.append(text)
+                
+                # Extract tables and format them cleanly to preserve structure for Gemini
+                tables = page.extract_tables()
+                for table in tables:
+                    table_str = []
+                    for row in table:
+                        # Clean up None values and join with tabs for structure
+                        clean_row = [str(cell).replace('\n', ' ').strip() if cell is not None else "" for cell in row]
+                        table_str.append(" | ".join(clean_row))
+                    if table_str:
+                        pages_text.append("\n[TABLE START]\n" + "\n".join(table_str) + "\n[TABLE END]\n")
+
         full_text = "\n".join(pages_text)
-        log.info("Extracted %d characters from %d pages", len(full_text), len(reader.pages))
+        log.info("Extracted %d characters from %d pages", len(full_text), len(pdf.pages))
         return full_text if full_text.strip() else None
     except Exception as exc:
         log.error("PDF extraction failed: %s", exc)
@@ -344,12 +367,6 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
 
     genai.configure(api_key=GEMINI_API_KEY)
 
-    # Truncate if too long (Gemini free tier context window)
-    max_chars = 900_000  # ~225k tokens approx
-    if len(transcript_text) > max_chars:
-        log.warning("Transcript truncated from %d to %d chars", len(transcript_text), max_chars)
-        transcript_text = transcript_text[:max_chars]
-
     # Load prompt from external file
     if PROMPT_FILE.exists():
         prompt_template = PROMPT_FILE.read_text(encoding="utf-8")
@@ -361,6 +378,8 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
 
     # Try multiple models as fallback (quota is per-model on free tier)
     models_to_try = [
+        "gemma-4-31b-it",
+        "gemma-4-26b-a4b-it",
         "gemini-2.5-pro-exp-03-25",
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
@@ -372,7 +391,7 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
         log.info("Trying Gemini model: %s", model_name)
         model = genai.GenerativeModel(
             model_name,
-            generation_config={"max_output_tokens": 1000, "temperature": 0.2}
+            generation_config={"temperature": 0.2}
         )
         for attempt in range(1, MAX_RETRIES + 1):
             try:
@@ -812,11 +831,14 @@ def process_stock(symbol: str, state: dict) -> bool:
 
     # Step 6: Send Telegram alert (if not in silent mode)
     if not SILENT_MODE:
-        send_telegram(symbol, latest["date_raw"], summary, pdf_url=latest["pdf_url"])
+        alert_sent = send_telegram(symbol, latest["date_raw"], summary, pdf_url=latest["pdf_url"])
+        if not alert_sent:
+            log.error("Failed to send Telegram alert for %s. State will not be updated so we retry next time.", symbol)
+            return False
     else:
         log.info("Silent mode is ON: skipping Telegram alert for %s", symbol)
 
-    # Step 7: Update state
+    # Step 7: Update state ONLY if alert was successfully sent (or in silent mode)
     state[symbol] = current_date
     log.info("State updated: %s → %s", symbol, current_date)
 
