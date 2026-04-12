@@ -5,3 +5,7 @@ venv/
 .venv/
 node_modules/
 dummy.md
+summaries/
+quarterly_cards/
+*.tmp
+www-screener-in.md
