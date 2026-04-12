@@ -26,6 +26,9 @@ from scraper import (
     ALERTS_SENT_THIS_RUN,
     BASE_DIR,
     GEMINI_API_KEY,
+    GEMINI_GEMMA_FALLBACK,
+    GEMINI_MODEL_FALLBACKS,
+    GEMINI_MODEL_PRIORITY,
     MAX_RETRIES,
     RETRY_DELAY,
     SILENT_MODE,
@@ -138,18 +141,10 @@ _JSON_ONLY_SUFFIX = (
 )
 
 # (model_id, supports_application_json_mime)
-# Prioritize Gemini (structured JSON MIME works well); Gemma 4 last as fallback (text + JSON suffix only).
-_QUARTERLY_MODEL_TRIALS: tuple[tuple[str, bool], ...] = (
-    ("gemini-2.5-flash", True),
-    ("gemini-2.5-flash-lite", True),
-    ("gemini-2.5-pro", True),
-    ("gemini-1.5-flash", True),
-    ("gemini-1.5-pro", True),
-    ("gemini-2.0-flash", True),
-    ("gemini-2.0-flash-lite", True),
-    ("gemma-4-31b-it", False),
-    ("gemma-4-26b-a4b-it", False),
-)
+# Same priority as concall pipeline (scraper.GEMINI_*); Gemma last — JSON MIME unreliable.
+_QUARTERLY_MODEL_TRIALS: tuple[tuple[str, bool], ...] = tuple(
+    (m, True) for m in GEMINI_MODEL_PRIORITY + GEMINI_MODEL_FALLBACKS
+) + tuple((m, False) for m in GEMINI_GEMMA_FALLBACK)
 
 
 def _gemini_response_text(response: Any) -> str:
@@ -501,7 +496,9 @@ def render_quarterly_card(
     payload: dict[str, Any],
     out_path: Path,
 ) -> bool:
-    W, H = 920, 1280
+    W = 920
+    # Tall scratch canvas; cropped to content after drawing (no large empty band).
+    canvas_h = 1800
     # Cool slate / petrol palette (not the previous navy + lime stack)
     BG = (15, 24, 32)
     TABLE_HEAD = (28, 42, 58)
@@ -514,7 +511,7 @@ def render_quarterly_card(
     GREY = (130, 146, 168)
     RULE = (48, 62, 78)
 
-    img = Image.new("RGB", (W, H), BG)
+    img = Image.new("RGB", (W, canvas_h), BG)
     draw = ImageDraw.Draw(img)
     draw.rectangle([0, 0, W, 4], fill=ACCENT)
 
@@ -631,7 +628,11 @@ def render_quarterly_card(
         draw.text((bx + 24, y + 28), value, fill=color, font=f_foot)
         if i < 2:
             draw.line([(bx + block_w, y + 12), (bx + block_w, y + fh - 12)], fill=RULE, width=1)
-    y += fh + 16
+    y += fh + 12
+
+    model_line = str(payload.get("_model") or "").strip() or "unknown"
+    draw.text((pad, y), f"Model: {model_line}", fill=GREY, font=f_dis)
+    y += 18
 
     ist = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%b-%Y %H:%M IST")
     disclaimer = "Snapshot from publicly available filings. Verify with official filing."
@@ -640,8 +641,12 @@ def render_quarterly_card(
     draw.text((pad, y + 14), source, fill=GREY, font=f_dis)
     rw = draw.textlength(ist, font=f_dis)
     draw.text((W - pad - rw, y + 7), ist, fill=GREY, font=f_dis)
+    y += 34
+    bottom_pad = 20
+    crop_h = min(canvas_h, max(y + bottom_pad, 120))
 
     try:
+        img = img.crop((0, 0, W, crop_h))
         img.save(out_path, format="PNG", optimize=True)
         log.info("Quarterly card saved → %s", out_path)
         return True
@@ -683,6 +688,7 @@ def send_telegram_quarterly_photo(
     image_path: Path,
     caption: str,
     pdf_url: str,
+    model_id: str = "",
 ) -> bool:
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         log.warning("Telegram not configured – skip quarterly photo")
@@ -694,10 +700,12 @@ def send_telegram_quarterly_photo(
         return True
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
-    safe_caption = _escape_tg_html((caption or "")[:900])
+    safe_caption = _escape_tg_html((caption or "")[:820])
+    m = (model_id or "").strip()
+    model_line = f"\n🤖 <b>Model</b>: <code>{_escape_tg_html(m)}</code>" if m else ""
     text = (
         f"📊 <b>NEW QUARTERLY RESULTS</b>\n"
-        f"🏢 <code>{symbol}</code> · <b>{period_key}</b>\n\n"
+        f"🏢 <code>{symbol}</code> · <b>{period_key}</b>{model_line}\n\n"
         f"{safe_caption}\n\n"
         f"🔗 <a href=\"{pdf_url}\">Raw PDF (Screener)</a>"
     )
@@ -781,7 +789,14 @@ def process_quarterly_stock(symbol: str, state: dict[str, str], soup: BeautifulS
 
     if not SILENT_MODE:
         cap = str(payload.get("summary_short") or "")[:700]
-        ok = send_telegram_quarterly_photo(sym, period_key, out_png, cap, pdf_url)
+        ok = send_telegram_quarterly_photo(
+            sym,
+            period_key,
+            out_png,
+            cap,
+            pdf_url,
+            model_id=str(payload.get("_model") or ""),
+        )
         if not ok:
             log.error("Telegram failed for quarterly %s – state not updated", sym)
             return False

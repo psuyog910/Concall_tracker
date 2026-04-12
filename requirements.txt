@@ -3,6 +3,7 @@ beautifulsoup4
 google-generativeai
 python-dateutil
 pdfplumber
+pymupdf>=1.24.0
 markdown
 playwright
 Pillow>=10.0.0
