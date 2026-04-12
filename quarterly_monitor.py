@@ -34,8 +34,8 @@ from scraper import (
     SILENT_MODE,
     TELEGRAM_CHAT_ID,
     TELEGRAM_TOKEN,
-    _get,
-    extract_pdf_text,
+    extract_pdf_text_enriched,
+    fetch_screener_soup_consolidated,
     log,
 )
 
@@ -49,6 +49,13 @@ QUARTERLY_PROMPT_FILE = BASE_DIR / "quarterly_prompt.md"
 SUMMARIES_DIR = BASE_DIR / "summaries"
 
 SEED_QUARTERLY_ONLY = os.environ.get("SEED_QUARTERLY_ONLY", "false").lower() == "true"
+
+# Post-LLM: minimum share of numeric cells that must match PDF text (fuzzy).
+QUARTERLY_PDF_MATCH_RATIO = float(os.environ.get("QUARTERLY_PDF_MATCH_RATIO", "0.65"))
+# Telegram Bot API caption hard limit.
+TELEGRAM_CAPTION_MAX = 1024
+# Extra LLM prompt passes when PDF spot-check fails (same model).
+MAX_QUARTERLY_VALIDATION_PASSES = min(3, max(1, int(os.environ.get("MAX_QUARTERLY_VALIDATION_PASSES", "2"))))
 
 QUARTERLY_CARDS_DIR.mkdir(exist_ok=True)
 SUMMARIES_DIR.mkdir(exist_ok=True)
@@ -87,9 +94,38 @@ def save_quarterly_state(state: dict[str, str]) -> None:
 # Scrape
 # ---------------------------------------------------------------------------
 
-def find_latest_quarterly_pdf(soup: BeautifulSoup) -> Optional[dict[str, Any]]:
-    """Pick latest quarter PDF link by calendar (year, month) from Screener HTML."""
-    best: Optional[tuple[int, int, str]] = None
+def _normalize_quarter_pdf_url(href: str) -> str:
+    href = href.strip()
+    if href.startswith("/"):
+        href = "https://www.screener.in" + href
+    if not href.endswith("/"):
+        href = href + "/"
+    return href
+
+
+def _link_consolidated_score(anchor: Any) -> int:
+    """
+    Prefer links labelled or surrounded by 'consolidated' over 'standalone' when Screener lists both.
+    """
+    blob = ((anchor.get_text() or "") + " " + (anchor.get("href") or "")).lower()
+    for par in (anchor.find_parent("tr"), anchor.find_parent("li"), anchor.parent):
+        if par is not None:
+            blob += " " + (par.get_text(" ", strip=True) or "").lower()[:800]
+            break
+    score = 0
+    if "consolidated" in blob:
+        score += 4
+    if "standalone" in blob or "stand alone" in blob:
+        score -= 3
+    if "consolidate" in blob and "consolidated" not in blob:
+        score += 1
+    return score
+
+
+def _iter_quarter_links(soup: Optional[BeautifulSoup]) -> list[tuple[int, int, str, Any]]:
+    out: list[tuple[int, int, str, Any]] = []
+    if soup is None:
+        return out
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
         m = QUARTER_LINK_RE.search(href)
@@ -97,19 +133,50 @@ def find_latest_quarterly_pdf(soup: BeautifulSoup) -> Optional[dict[str, Any]]:
             continue
         _cid, month_s, year_s = m.groups()
         month, year = int(month_s), int(year_s)
-        if href.startswith("/"):
-            href = "https://www.screener.in" + href
-        if not href.endswith("/"):
-            href = href + "/"
-        cand = (year, month, href)
-        if best is None or cand[:2] > best[:2]:
-            best = cand
-    if not best:
+        url = _normalize_quarter_pdf_url(href)
+        out.append((year, month, url, a))
+    return out
+
+
+def find_latest_quarterly_pdf(
+    soup: BeautifulSoup,
+    soup_consolidated: Optional[BeautifulSoup] = None,
+) -> Optional[dict[str, Any]]:
+    """
+    Pick latest quarter PDF by calendar (year, month) from Screener HTML.
+    Merges links from the main company page and /consolidated/ when provided.
+    When multiple links exist for the same period, prefers consolidated-labelled anchors.
+    """
+    from collections import defaultdict
+
+    scores: dict[str, int] = defaultdict(int)
+    period_by_url: dict[str, tuple[int, int]] = {}
+    for y, m, url, a in _iter_quarter_links(soup) + _iter_quarter_links(soup_consolidated):
+        sc = _link_consolidated_score(a)
+        if sc > scores[url]:
+            scores[url] = sc
+        period_by_url[url] = (y, m)
+
+    if not period_by_url:
         return None
-    year, month, url = best
+
+    best_period: Optional[tuple[int, int]] = None
+    for y, m in period_by_url.values():
+        if best_period is None or (y, m) > best_period:
+            best_period = (y, m)
+    assert best_period is not None
+    by_period = [u for u, p in period_by_url.items() if p == best_period]
+    best_url = max(by_period, key=lambda u: (scores.get(u, 0), u))
+
+    year, month = period_by_url[best_url]
     period_key = f"{year}-{month:02d}"
-    log.info("Latest quarterly PDF slot: %s → %s", period_key, url)
-    return {"period_key": period_key, "pdf_url": url, "year": year, "month": month}
+    log.info(
+        "Latest quarterly PDF slot: %s → %s (consolidated_score=%s)",
+        period_key,
+        best_url,
+        scores.get(best_url, 0),
+    )
+    return {"period_key": period_key, "pdf_url": best_url, "year": year, "month": month}
 
 
 def scrape_company_heading(soup: BeautifulSoup) -> str:
@@ -310,6 +377,110 @@ def apply_computed_quarterly_changes(payload: dict[str, Any]) -> None:
             row["yoy_tone"] = "neutral"
 
 
+def _compact_for_match(s: str) -> str:
+    t = (s or "").lower().replace(",", "").replace("₹", "").replace("\u00a0", " ")
+    return re.sub(r"\s+", "", t)
+
+
+def _value_match_variants(cell: str) -> list[str]:
+    """Strings to look for inside compacted PDF text (fuzzy but cheap)."""
+    raw = str(cell).strip()
+    if not raw or raw in ("—", "–", "-", "n/a", "N/A"):
+        return []
+    out: list[str] = []
+    for v in (raw, raw.replace(" ", "")):
+        out.append(_compact_for_match(v))
+    t = raw.replace(",", "")
+    if t.endswith("%"):
+        base = t[:-1].strip()
+        out.append(_compact_for_match(base + "%"))
+        out.append(_compact_for_match(base))
+        try:
+            d = Decimal(base)
+            out.append(_compact_for_match(f"{d:.2f}%"))
+            out.append(_compact_for_match(f"{d:.1f}%"))
+        except InvalidOperation:
+            pass
+    else:
+        try:
+            d = Decimal(re.sub(r"[^\d.\-]", "", t))
+            s0 = format(d, "f").rstrip("0").rstrip(".")
+            out.append(_compact_for_match(s0))
+            out.append(_compact_for_match(f"{d:.2f}"))
+        except (InvalidOperation, ValueError):
+            out.append(_compact_for_match(t))
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for x in out:
+        if len(x) >= 1 and x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return uniq
+
+
+def _cell_found_in_pdf(cell: str, hay_compact: str) -> bool:
+    vars_ = _value_match_variants(cell)
+    if not vars_:
+        return True
+    for v in vars_:
+        if len(v) < 2 and v.isdigit():
+            continue
+        if v in hay_compact:
+            return True
+    return False
+
+
+def validate_payload_numbers_against_pdf(
+    payload: dict[str, Any],
+    pdf_text: str,
+) -> tuple[bool, list[str], float]:
+    """
+    Check that LLM numeric cells appear in the merged PDF extraction (spot-check).
+    Returns (ok, human-readable issues, matched_ratio among non-missing cells).
+    """
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        return False, ["no rows in payload"], 0.0
+    hay = (pdf_text or "") + "\n"
+    hay_compact = _compact_for_match(hay)
+    issues: list[str] = []
+    total = 0
+    matched = 0
+    for row in rows[:8]:
+        if not isinstance(row, dict):
+            continue
+        metric = str(row.get("metric") or "?")
+        for key in ("v_curr", "v_prev_q", "v_prev_y"):
+            cell = str(row.get(key) or "").strip()
+            if not cell or cell in ("—", "–", "-", "n/a", "N/A"):
+                continue
+            total += 1
+            if _cell_found_in_pdf(cell, hay_compact):
+                matched += 1
+            else:
+                issues.append(f"{metric} {key}={cell!r}")
+
+    ratio = (matched / total) if total else 1.0
+    ok = ratio >= QUARTERLY_PDF_MATCH_RATIO and total > 0
+    if total == 0:
+        ok = False
+        issues.append("no numeric cells to validate")
+    return ok, issues, ratio
+
+
+def _validation_retry_instruction(issues: list[str]) -> str:
+    joined = "; ".join(issues[:12])
+    if len(issues) > 12:
+        joined += f" … (+{len(issues) - 12} more)"
+    return (
+        "\n\n[VALIDATION — REQUIRED]\n"
+        "The previous JSON listed figures that do not appear in the PDF text excerpt. "
+        "Reply again with ONE JSON object. Fix ONLY the numeric fields v_curr, v_prev_q, v_prev_y "
+        "so each value appears in the filing text (use the same basis: consolidated if available). "
+        f"Problem cells: {joined}\n"
+    )
+
+
 def _parse_json_flexible(raw: str) -> dict[str, Any]:
     text = (raw or "").strip()
     if not text:
@@ -382,7 +553,6 @@ def build_quarterly_payload(
 
     for model_name, use_json_mime in _QUARTERLY_MODEL_TRIALS:
         log.info("Quarterly JSON: trying model %s (json_mime=%s)", model_name, use_json_mime)
-        prompt = base_prompt + (_JSON_ONLY_SUFFIX if not use_json_mime else "")
 
         gen_cfg: dict[str, Any] = {"temperature": 0.15}
         if use_json_mime:
@@ -395,61 +565,104 @@ def build_quarterly_payload(
             continue
 
         model_gave_404 = False
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                response = model.generate_content(prompt)
-                raw = _gemini_response_text(response)
-                
-                if not raw:
-                    # Log more detail if possible (finish reason, safety, etc.)
-                    finish_reason = "UNKNOWN"
-                    if hasattr(response, "candidates") and response.candidates:
-                        finish_reason = response.candidates[0].finish_reason.name
-                    
+        quota_skip_model = False
+        validation_extra = ""
+        last_payload: Optional[dict[str, Any]] = None
+
+        for val_pass in range(MAX_QUARTERLY_VALIDATION_PASSES):
+            json_suffix = _JSON_ONLY_SUFFIX if not use_json_mime else ""
+            prompt = base_prompt + validation_extra + json_suffix
+
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    response = model.generate_content(prompt)
+                    raw = _gemini_response_text(response)
+
+                    if not raw:
+                        finish_reason = "UNKNOWN"
+                        if hasattr(response, "candidates") and response.candidates:
+                            finish_reason = response.candidates[0].finish_reason.name
+
+                        log.warning(
+                            "Quarterly model %s attempt %d/%d: empty output (reason: %s). "
+                            "Note: Gemma requires json_mime=false.",
+                            model_name,
+                            attempt,
+                            MAX_RETRIES,
+                            finish_reason,
+                        )
+                        _log_prompt_feedback(response)
+                        if attempt < MAX_RETRIES:
+                            time.sleep(RETRY_DELAY * attempt)
+                        continue
+                    payload = _parse_json_flexible(raw)
+                    apply_computed_quarterly_changes(payload)
+                    rows = payload.get("rows")
+                    if not isinstance(rows, list) or len(rows) < 3:
+                        log.warning("Gemini returned unusable rows; retrying")
+                        if attempt < MAX_RETRIES:
+                            time.sleep(RETRY_DELAY * attempt)
+                        continue
+
+                    ok, issues, ratio = validate_payload_numbers_against_pdf(payload, pdf_text)
+                    payload["_pdf_validation_ok"] = ok
+                    payload["_pdf_validation_ratio"] = round(ratio, 4)
+                    payload["_pdf_validation_issues"] = issues
+                    last_payload = payload
+
+                    if ok:
+                        payload["_model"] = model_name
+                        log.info(
+                            "Quarterly PDF spot-check OK (%.0f%% of cells matched)",
+                            ratio * 100,
+                        )
+                        return payload
+
                     log.warning(
-                        "Quarterly model %s attempt %d/%d: empty output (reason: %s). "
-                        "Note: Gemma requires json_mime=false.",
+                        "Quarterly PDF spot-check %.0f%% (need %.0f%%) pass %d/%d: %s",
+                        ratio * 100,
+                        QUARTERLY_PDF_MATCH_RATIO * 100,
+                        val_pass + 1,
+                        MAX_QUARTERLY_VALIDATION_PASSES,
+                        issues[:6],
+                    )
+                    if val_pass + 1 < MAX_QUARTERLY_VALIDATION_PASSES:
+                        validation_extra = _validation_retry_instruction(issues)
+                    break
+
+                except Exception as exc:
+                    if _is_model_not_found(exc):
+                        log.warning("Quarterly model %s not available (404), skipping", model_name)
+                        model_gave_404 = True
+                        break
+                    if _is_quota_exhausted(exc):
+                        log.warning(
+                            "Quarterly model %s quota / rate limit, trying next model",
+                            model_name,
+                        )
+                        _sleep_after_rate_limit(exc)
+                        quota_skip_model = True
+                        break
+                    log.warning(
+                        "Quarterly JSON model %s attempt %d/%d: %s",
                         model_name,
                         attempt,
                         MAX_RETRIES,
-                        finish_reason
+                        exc,
                     )
-                    _log_prompt_feedback(response)
                     if attempt < MAX_RETRIES:
                         time.sleep(RETRY_DELAY * attempt)
-                    continue
-                payload = _parse_json_flexible(raw)
-                apply_computed_quarterly_changes(payload)
-                rows = payload.get("rows")
-                if not isinstance(rows, list) or len(rows) < 3:
-                    log.warning("Gemini returned unusable rows; retrying")
-                    if attempt < MAX_RETRIES:
-                        time.sleep(RETRY_DELAY * attempt)
-                    continue
-                payload["_model"] = model_name
-                return payload
-            except Exception as exc:
-                if _is_model_not_found(exc):
-                    log.warning("Quarterly model %s not available (404), skipping", model_name)
-                    model_gave_404 = True
-                    break
-                if _is_quota_exhausted(exc):
-                    log.warning(
-                        "Quarterly model %s quota / rate limit, trying next model",
-                        model_name,
-                    )
-                    _sleep_after_rate_limit(exc)
-                    break
-                log.warning(
-                    "Quarterly JSON model %s attempt %d/%d: %s",
-                    model_name,
-                    attempt,
-                    MAX_RETRIES,
-                    exc,
-                )
-                if attempt < MAX_RETRIES:
-                    time.sleep(RETRY_DELAY * attempt)
-        if model_gave_404:
+            if model_gave_404 or quota_skip_model:
+                break
+
+        if last_payload is not None:
+            last_payload["_model"] = model_name
+            log.error(
+                "Quarterly PDF validation still failing after %s passes — using last JSON anyway",
+                MAX_QUARTERLY_VALIDATION_PASSES,
+            )
+            return last_payload
+        if model_gave_404 or quota_skip_model:
             continue
 
     log.error("Quarterly JSON extraction failed for all models")
@@ -634,6 +847,21 @@ def render_quarterly_card(
     draw.text((pad, y), f"Model: {model_line}", fill=GREY, font=f_dis)
     y += 18
 
+    WARN = (244, 180, 120)
+    notes: list[str] = []
+    if payload.get("_pdf_validation_ok") is False:
+        r = payload.get("_pdf_validation_ratio")
+        try:
+            pct = int(float(r) * 100) if r is not None else 0
+        except (TypeError, ValueError):
+            pct = 0
+        notes.append(f"Spot-check: only ~{pct}% of figures matched PDF text")
+    if payload.get("_pdf_warn_scan_only"):
+        notes.append("Low extracted text — possible scan PDF (enable ENABLE_PDF_OCR if needed)")
+    if notes:
+        draw.text((pad, y), " · ".join(notes), fill=WARN, font=f_dis)
+        y += 16
+
     ist = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%b-%Y %H:%M IST")
     disclaimer = "Snapshot from publicly available filings. Verify with official filing."
     source = "Source: NSE/BSE filing"
@@ -664,10 +892,24 @@ def save_quarterly_summary_md(
     slug = period_key.replace("-", "_")
     path = SUMMARIES_DIR / f"{symbol}_quarterly_{slug}.md"
     summary = str(payload.get("summary_short") or "").strip()
+    vok = payload.get("_pdf_validation_ok")
+    vr = payload.get("_pdf_validation_ratio")
+    issues = payload.get("_pdf_validation_issues") or []
+    iss_txt = ""
+    if isinstance(issues, list) and issues:
+        iss_txt = "\n**Spot-check gaps:** " + "; ".join(str(x) for x in issues[:20])
+        if len(issues) > 20:
+            iss_txt += f" … (+{len(issues) - 20} more)"
     body = (
         f"# {symbol} Quarterly snapshot ({period_key})\n\n"
         f"**PDF (via Screener):** {pdf_url}\n\n"
         f"**Model:** {payload.get('_model', 'unknown')}\n\n"
+        f"**PDF spot-check:** "
+        f"{'OK' if vok else 'FAILED or partial'} "
+        f"(matched ratio {vr!s}){iss_txt}\n\n"
+        f"**PDF pages (approx):** {payload.get('_pdf_pages', '—')} · "
+        f"**OCR used:** {payload.get('_pdf_ocr_used', False)} · "
+        f"**Low-text warning:** {payload.get('_pdf_warn_scan_only', False)}\n\n"
         f"---\n\n{summary}\n"
     )
     path.write_text(body, encoding="utf-8")
@@ -682,13 +924,42 @@ def _escape_tg_html(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def build_quarterly_telegram_caption(
+    symbol: str,
+    period_key: str,
+    summary: str,
+    pdf_url: str,
+    model_id: str,
+    validation_ok: Optional[bool] = None,
+    validation_ratio: Optional[float] = None,
+) -> str:
+    """
+    Build HTML caption under Telegram's 1024-character limit (UTF-16 length on API may vary; stay conservative).
+    """
+    m = (model_id or "").strip()
+    model_line = f"\n🤖 <b>Model</b>: <code>{_escape_tg_html(m)}</code>" if m else ""
+    warn_line = ""
+    if validation_ok is False:
+        pct = int((validation_ratio or 0) * 100)
+        warn_line = f"\n⚠️ <b>PDF spot-check</b>: {pct}% cells matched — verify figures."
+    head = (
+        f"📊 <b>NEW QUARTERLY RESULTS</b>\n"
+        f"🏢 <code>{_escape_tg_html(symbol)}</code> · <b>{_escape_tg_html(period_key)}</b>"
+        f"{model_line}{warn_line}\n\n"
+    )
+    foot = f"\n\n🔗 <a href=\"{pdf_url}\">Raw PDF (Screener)</a>"
+    room = max(80, TELEGRAM_CAPTION_MAX - len(head) - len(foot) - 8)
+    body = _escape_tg_html((summary or "").strip())
+    if len(body) > room:
+        body = body[: max(0, room - 1)] + "…"
+    return head + body + foot
+
+
 def send_telegram_quarterly_photo(
     symbol: str,
     period_key: str,
     image_path: Path,
-    caption: str,
-    pdf_url: str,
-    model_id: str = "",
+    caption_html: str,
 ) -> bool:
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         log.warning("Telegram not configured – skip quarterly photo")
@@ -700,15 +971,10 @@ def send_telegram_quarterly_photo(
         return True
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
-    safe_caption = _escape_tg_html((caption or "")[:820])
-    m = (model_id or "").strip()
-    model_line = f"\n🤖 <b>Model</b>: <code>{_escape_tg_html(m)}</code>" if m else ""
-    text = (
-        f"📊 <b>NEW QUARTERLY RESULTS</b>\n"
-        f"🏢 <code>{symbol}</code> · <b>{period_key}</b>{model_line}\n\n"
-        f"{safe_caption}\n\n"
-        f"🔗 <a href=\"{pdf_url}\">Raw PDF (Screener)</a>"
-    )
+    text = (caption_html or "").strip()
+    if len(text) > TELEGRAM_CAPTION_MAX:
+        text = text[: TELEGRAM_CAPTION_MAX - 1] + "…"
+        log.warning("Telegram caption truncated to %d chars", TELEGRAM_CAPTION_MAX)
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "caption": text,
@@ -744,13 +1010,18 @@ def send_telegram_quarterly_photo(
 # Pipeline
 # ---------------------------------------------------------------------------
 
-def process_quarterly_stock(symbol: str, state: dict[str, str], soup: BeautifulSoup) -> bool:
+def process_quarterly_stock(
+    symbol: str,
+    state: dict[str, str],
+    soup: BeautifulSoup,
+    soup_consolidated: Optional[BeautifulSoup] = None,
+) -> bool:
     """Returns True if a new quarter was processed (and state updated)."""
     sym = symbol.upper().strip()
     log.info("-" * 40)
     log.info("Quarterly check: %s", sym)
 
-    latest = find_latest_quarterly_pdf(soup)
+    latest = find_latest_quarterly_pdf(soup, soup_consolidated)
     if not latest:
         log.info("No quarterly PDF links for %s", sym)
         return False
@@ -769,17 +1040,21 @@ def process_quarterly_stock(symbol: str, state: dict[str, str], soup: BeautifulS
         log.info("SEED_QUARTERLY_ONLY: state → %s for %s", period_key, sym)
         return True
 
-    pdf_text = extract_pdf_text(pdf_url)
-    if not pdf_text:
+    bundle = extract_pdf_text_enriched(pdf_url)
+    if not bundle or not str(bundle.get("text") or "").strip():
         log.error("Could not read quarterly PDF for %s", sym)
         return False
-
+    pdf_text = str(bundle["text"])
     company_name = scrape_company_heading(soup)
     snippet = page_text_snippet(soup)
     payload = build_quarterly_payload(sym, company_name, pdf_text, snippet)
     if not payload:
         log.error("Quarterly AI payload failed for %s", sym)
         return False
+
+    payload["_pdf_pages"] = bundle.get("pages")
+    payload["_pdf_warn_scan_only"] = bool(bundle.get("warn_scan_only"))
+    payload["_pdf_ocr_used"] = bool(bundle.get("ocr_used"))
 
     out_png = QUARTERLY_CARDS_DIR / f"{sym}_Q_{period_key.replace('-', '_')}.png"
     if not render_quarterly_card(sym, payload, out_png):
@@ -788,15 +1063,16 @@ def process_quarterly_stock(symbol: str, state: dict[str, str], soup: BeautifulS
     save_quarterly_summary_md(sym, period_key, pdf_url, payload)
 
     if not SILENT_MODE:
-        cap = str(payload.get("summary_short") or "")[:700]
-        ok = send_telegram_quarterly_photo(
+        cap = build_quarterly_telegram_caption(
             sym,
             period_key,
-            out_png,
-            cap,
+            str(payload.get("summary_short") or ""),
             pdf_url,
-            model_id=str(payload.get("_model") or ""),
+            str(payload.get("_model") or ""),
+            validation_ok=payload.get("_pdf_validation_ok"),
+            validation_ratio=float(payload.get("_pdf_validation_ratio") or 0),
         )
+        ok = send_telegram_quarterly_photo(sym, period_key, out_png, cap)
         if not ok:
             log.error("Telegram failed for quarterly %s – state not updated", sym)
             return False
