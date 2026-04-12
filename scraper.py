@@ -18,7 +18,7 @@ import time
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 from bs4 import BeautifulSoup
@@ -217,6 +217,18 @@ def fetch_screener_soup(symbol: str) -> Optional[BeautifulSoup]:
     return BeautifulSoup(resp.text, "html.parser")
 
 
+def fetch_screener_soup_consolidated(symbol: str) -> Optional[BeautifulSoup]:
+    """Download the consolidated company tab (extra quarter / context links when present)."""
+    url = f"https://www.screener.in/company/{symbol.strip()}/consolidated/"
+    log.info("Fetching %s", url)
+    try:
+        resp = _get(url)
+    except RuntimeError:
+        log.warning("Could not fetch Screener consolidated page for %s", symbol)
+        return None
+    return BeautifulSoup(resp.text, "html.parser")
+
+
 def find_latest_transcript(symbol: str, soup: Optional[BeautifulSoup] = None) -> Optional[dict]:
     """
     Scrape Screener.in for the latest concall transcript link and date.
@@ -339,6 +351,58 @@ def _pdfplumber_extract_pdf_bytes(data: bytes) -> tuple[str, int]:
         return "", 0
 
 
+def _merge_pdf_text_sections(pp_text: str, fz_text: str) -> str:
+    """Combine pdfplumber + PyMuPDF streams (same logic as extract_pdf_text)."""
+    sections: list[str] = []
+    if pp_text.strip():
+        sections.append("=== PDFPLUMBER (text + tables) ===\n" + pp_text.strip())
+    if fz_text.strip():
+        if not pp_text.strip() or (
+            len(fz_text) > len(pp_text) * 1.15
+            or len(pp_text) < 400
+        ):
+            sections.append("=== PYMUPDF (full text) ===\n" + fz_text.strip())
+        elif pp_text.strip() and fz_text.strip() != pp_text.strip():
+            sections.append("=== PYMUPDF (alternate layout) ===\n" + fz_text.strip())
+    return "\n\n".join(sections)
+
+
+def _ocr_pdf_text_tesseract(data: bytes, page_count_hint: int) -> tuple[str, bool]:
+    """
+    Tesseract OCR for scan-heavy PDFs (optional; caller gates with ENABLE_PDF_OCR).
+    Free locally but requires the ``tesseract`` binary on PATH and ``pip install pytesseract``.
+    """
+    if fitz is None:
+        return "", False
+    try:
+        import pytesseract  # type: ignore
+        from PIL import Image
+    except ImportError:
+        log.warning("ENABLE_PDF_OCR set but pytesseract/PIL not installed — skip OCR")
+        return "", False
+    max_pages = min(max(page_count_hint, 1), 8)
+    parts: list[str] = []
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+        try:
+            for i in range(min(len(doc), max_pages)):
+                page = doc[i]
+                mat = fitz.Matrix(2.0, 2.0)
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+                txt = pytesseract.image_to_string(img) or ""
+                if txt.strip():
+                    parts.append(f"\n--- OCR Page {i + 1} ---\n{txt.strip()}")
+        finally:
+            doc.close()
+    except Exception as exc:
+        log.warning("OCR pass failed: %s", exc)
+        return "", False
+    merged = "\n".join(parts)
+    if merged.strip():
+        log.info("OCR extracted %d characters from up to %d pages", len(merged), max_pages)
+        return merged, True
+    return "", False
 def _pymupdf_extract_pdf_bytes(data: bytes) -> tuple[str, int]:
     """Layout-preserving text via PyMuPDF (good when pdfplumber misses embedded text)."""
     if fitz is None:
@@ -360,8 +424,12 @@ def _pymupdf_extract_pdf_bytes(data: bytes) -> tuple[str, int]:
         return "", 0
 
 
-def extract_pdf_text(pdf_url: str) -> Optional[str]:
-    """Download a PDF and extract text: pdfplumber (tables) + PyMuPDF (full text fallback/supplement)."""
+def extract_pdf_text_enriched(pdf_url: str) -> Optional[dict[str, Any]]:
+    """
+    Download a PDF and return text plus metadata for quarterly validation / warnings.
+
+    Keys: ``text``, ``pages``, ``warn_scan_only`` (bool), ``ocr_used`` (bool).
+    """
     log.info("Downloading PDF: %s", pdf_url)
     try:
         resp = _get(pdf_url)
@@ -380,27 +448,50 @@ def extract_pdf_text(pdf_url: str) -> Optional[str]:
         log.error("Neither pdfplumber nor PyMuPDF installed – cannot extract PDF text")
         return None
 
-    sections: list[str] = []
-    if pp_text.strip():
-        sections.append("=== PDFPLUMBER (text + tables) ===\n" + pp_text.strip())
-    if fz_text.strip():
-        # Avoid near-duplicate if both are very similar
-        if not pp_text.strip() or (
-            len(fz_text) > len(pp_text) * 1.15
-            or len(pp_text) < 400
-        ):
-            sections.append("=== PYMUPDF (full text) ===\n" + fz_text.strip())
-        elif pp_text.strip() and fz_text.strip() != pp_text.strip():
-            sections.append("=== PYMUPDF (alternate layout) ===\n" + fz_text.strip())
+    pages = max(pp_pages, fz_pages, 1)
+    full_text = _merge_pdf_text_sections(pp_text, fz_text)
+    ocr_used = False
+    ocr_env = os.environ.get("ENABLE_PDF_OCR", "").lower() in ("1", "true", "yes")
+    if ocr_env:
+        short = (not full_text.strip()) or len(full_text) < max(400, 100 * pages)
+        if short:
+            ocr_chunk, ocr_used = _ocr_pdf_text_tesseract(data, pages)
+            if ocr_chunk.strip():
+                sep = "\n\n" if full_text.strip() else ""
+                full_text = full_text.strip() + sep + "=== OPTIONAL OCR (Tesseract) ===\n" + ocr_chunk.strip()
 
-    full_text = "\n\n".join(sections)
+    warn_scan_only = bool(full_text.strip()) and len(full_text) < max(350, 120 * pages)
+    if warn_scan_only:
+        log.warning(
+            "PDF text is short (%d chars, ~%d pages) — may be scan-only; "
+            "set ENABLE_PDF_OCR=1 with tesseract installed for OCR.",
+            len(full_text),
+            pages,
+        )
+
     log.info(
-        "Extracted %d characters (pdfplumber pages=%s, pymupdf pages=%s)",
+        "Extracted %d characters (pdfplumber pages=%s, pymupdf pages=%s, ocr=%s)",
         len(full_text),
         pp_pages,
         fz_pages,
+        ocr_used,
     )
-    return full_text if full_text.strip() else None
+    if not full_text.strip():
+        return None
+    return {
+        "text": full_text,
+        "pages": pages,
+        "warn_scan_only": warn_scan_only,
+        "ocr_used": ocr_used,
+    }
+
+
+def extract_pdf_text(pdf_url: str) -> Optional[str]:
+    """Download a PDF and extract text (backward-compatible wrapper)."""
+    info = extract_pdf_text_enriched(pdf_url)
+    if not info:
+        return None
+    return str(info["text"])
 
 
 # ---------------------------------------------------------------------------
@@ -488,8 +579,8 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
     # Try models in priority order (quota may be per-model on free tier).
     models_to_try = (
         list(GEMINI_MODEL_PRIORITY)
-        + list(GEMINI_MODEL_FALLBACKS)
         + list(GEMINI_GEMMA_FALLBACK)
+        + list(GEMINI_MODEL_FALLBACKS)
     )
 
     for model_name in models_to_try:
@@ -1003,6 +1094,7 @@ def main() -> None:
 
     for symbol in stocks:
         soup = fetch_screener_soup(symbol)
+        soup_consolidated = fetch_screener_soup_consolidated(symbol) if soup is not None else None
         try:
             if process_stock(symbol, state, soup=soup):
                 new_concall += 1
@@ -1010,7 +1102,9 @@ def main() -> None:
             log.error("Unhandled concall error for %s: %s", symbol, exc, exc_info=True)
 
         try:
-            if soup is not None and process_quarterly_stock(symbol, qstate, soup):
+            if soup is not None and process_quarterly_stock(
+                symbol, qstate, soup, soup_consolidated=soup_consolidated
+            ):
                 new_quarterly += 1
         except Exception as exc:
             log.error("Unhandled quarterly error for %s: %s", symbol, exc, exc_info=True)
