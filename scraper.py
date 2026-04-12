@@ -28,7 +28,12 @@ try:
     import pdfplumber
 except ImportError:
     pdfplumber = None
-    
+
+try:
+    import fitz  # PyMuPDF
+except ImportError:
+    fitz = None
+
 try:
     import markdown
 except ImportError:
@@ -68,6 +73,27 @@ SEED_ONLY = os.environ.get("SEED_ONLY", "false").lower() == "true"
 
 MAX_RETRIES = 3
 RETRY_DELAY = 5  # seconds
+
+# Shared Gemini try-order for concall summaries and quarterly JSON (priority first).
+# See https://ai.google.dev/gemini-api/docs/models
+GEMINI_MODEL_PRIORITY: tuple[str, ...] = (
+    "gemini-3.1-pro-preview",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3-flash-preview",
+)
+GEMINI_MODEL_FALLBACKS: tuple[str, ...] = (
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-pro",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+)
+GEMINI_GEMMA_FALLBACK: tuple[str, ...] = (
+    "gemma-4-31b-it",
+    "gemma-4-26b-a4b-it",
+)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -263,8 +289,79 @@ def find_latest_transcript(symbol: str, soup: Optional[BeautifulSoup] = None) ->
 # PDF text extraction
 # ---------------------------------------------------------------------------
 
+def _pdfplumber_extract_pdf_bytes(data: bytes) -> tuple[str, int]:
+    """Table-aware extraction via pdfplumber. Returns (text, page_count)."""
+    if pdfplumber is None:
+        return "", 0
+    pages_text: list[str] = []
+    page_count = 0
+    table_settings_opts: tuple[dict, ...] = (
+        {},
+        {
+            "vertical_strategy": "lines",
+            "horizontal_strategy": "lines",
+            "intersection_tolerance": 3,
+            "snap_tolerance": 3,
+            "join_tolerance": 3,
+        },
+        {"vertical_strategy": "text", "horizontal_strategy": "text"},
+    )
+    try:
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            page_count = len(pdf.pages)
+            for page in pdf.pages:
+                t = page.extract_text(layout=False)
+                if t:
+                    pages_text.append(t)
+                best_tables: list = []
+                for settings in table_settings_opts:
+                    try:
+                        cand = page.extract_tables(table_settings=settings) or []
+                    except Exception:
+                        cand = []
+                    if len(cand) > len(best_tables):
+                        best_tables = cand
+                for table in best_tables:
+                    table_str = []
+                    for row in table or []:
+                        clean_row = [
+                            str(cell).replace("\n", " ").strip() if cell is not None else ""
+                            for cell in (row or [])
+                        ]
+                        table_str.append(" | ".join(clean_row))
+                    if table_str:
+                        pages_text.append(
+                            "\n[TABLE START]\n" + "\n".join(table_str) + "\n[TABLE END]\n"
+                        )
+        return "\n".join(pages_text), page_count
+    except Exception as exc:
+        log.warning("pdfplumber extraction failed: %s", exc)
+        return "", 0
+
+
+def _pymupdf_extract_pdf_bytes(data: bytes) -> tuple[str, int]:
+    """Layout-preserving text via PyMuPDF (good when pdfplumber misses embedded text)."""
+    if fitz is None:
+        return "", 0
+    parts: list[str] = []
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+        try:
+            n = len(doc)
+            for i in range(n):
+                page = doc[i]
+                parts.append(f"\n--- Page {i + 1} ---\n")
+                parts.append(page.get_text("text") or "")
+        finally:
+            doc.close()
+        return "\n".join(parts), n
+    except Exception as exc:
+        log.warning("PyMuPDF extraction failed: %s", exc)
+        return "", 0
+
+
 def extract_pdf_text(pdf_url: str) -> Optional[str]:
-    """Download a PDF and extract its text content using pdfplumber for better table structure."""
+    """Download a PDF and extract text: pdfplumber (tables) + PyMuPDF (full text fallback/supplement)."""
     log.info("Downloading PDF: %s", pdf_url)
     try:
         resp = _get(pdf_url)
@@ -272,36 +369,38 @@ def extract_pdf_text(pdf_url: str) -> Optional[str]:
         log.error("Failed to download PDF: %s", pdf_url)
         return None
 
-    if pdfplumber is None:
-        log.error("pdfplumber not installed – cannot extract PDF text")
+    data = resp.content
+    if not data:
         return None
 
-    try:
-        with pdfplumber.open(io.BytesIO(resp.content)) as pdf:
-            pages_text = []
-            for page in pdf.pages:
-                # Extract plain text
-                text = page.extract_text()
-                if text:
-                    pages_text.append(text)
-                
-                # Extract tables and format them cleanly to preserve structure for Gemini
-                tables = page.extract_tables()
-                for table in tables:
-                    table_str = []
-                    for row in table:
-                        # Clean up None values and join with tabs for structure
-                        clean_row = [str(cell).replace('\n', ' ').strip() if cell is not None else "" for cell in row]
-                        table_str.append(" | ".join(clean_row))
-                    if table_str:
-                        pages_text.append("\n[TABLE START]\n" + "\n".join(table_str) + "\n[TABLE END]\n")
+    pp_text, pp_pages = _pdfplumber_extract_pdf_bytes(data)
+    fz_text, fz_pages = _pymupdf_extract_pdf_bytes(data)
 
-        full_text = "\n".join(pages_text)
-        log.info("Extracted %d characters from %d pages", len(full_text), len(pdf.pages))
-        return full_text if full_text.strip() else None
-    except Exception as exc:
-        log.error("PDF extraction failed: %s", exc)
+    if pdfplumber is None and fitz is None:
+        log.error("Neither pdfplumber nor PyMuPDF installed – cannot extract PDF text")
         return None
+
+    sections: list[str] = []
+    if pp_text.strip():
+        sections.append("=== PDFPLUMBER (text + tables) ===\n" + pp_text.strip())
+    if fz_text.strip():
+        # Avoid near-duplicate if both are very similar
+        if not pp_text.strip() or (
+            len(fz_text) > len(pp_text) * 1.15
+            or len(pp_text) < 400
+        ):
+            sections.append("=== PYMUPDF (full text) ===\n" + fz_text.strip())
+        elif pp_text.strip() and fz_text.strip() != pp_text.strip():
+            sections.append("=== PYMUPDF (alternate layout) ===\n" + fz_text.strip())
+
+    full_text = "\n\n".join(sections)
+    log.info(
+        "Extracted %d characters (pdfplumber pages=%s, pymupdf pages=%s)",
+        len(full_text),
+        pp_pages,
+        fz_pages,
+    )
+    return full_text if full_text.strip() else None
 
 
 # ---------------------------------------------------------------------------
@@ -386,19 +485,12 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
 
     prompt = prompt_template.format(transcript=transcript_text)
 
-    # Try multiple models as fallback (quota is per-model on free tier).
-    # Gemma 4 first, then Gemini 2.5 / 1.5 / 2.0; avoid gemini-*-exp-* (rotates / 404s).
-    models_to_try = [
-        "gemma-4-31b-it",
-        "gemma-4-26b-a4b-it",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-pro",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-    ]
+    # Try models in priority order (quota may be per-model on free tier).
+    models_to_try = (
+        list(GEMINI_MODEL_PRIORITY)
+        + list(GEMINI_MODEL_FALLBACKS)
+        + list(GEMINI_GEMMA_FALLBACK)
+    )
 
     for model_name in models_to_try:
         log.info("Trying Gemini model: %s", model_name)
