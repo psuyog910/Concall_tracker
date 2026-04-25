@@ -21,23 +21,27 @@ from PIL import Image, ImageDraw, ImageFont
 
 import google.generativeai as genai
 
-# Import shared scraper utilities (scraper must be loaded first in normal runs)
-from scraper import (
-    ALERTS_SENT_THIS_RUN,
+from config import (
     BASE_DIR,
     GEMINI_API_KEY,
     GEMINI_GEMMA_FALLBACK,
     GEMINI_MODEL_FALLBACKS,
     GEMINI_MODEL_PRIORITY,
+    TELEGRAM_CHAT_ID,
+    TELEGRAM_TOKEN,
+    log,
+)
+
+# Import shared scraper utilities
+from scraper import (
+    ALERTS_SENT_THIS_RUN,
     MAX_RETRIES,
     RETRY_DELAY,
     SILENT_MODE,
-    TELEGRAM_CHAT_ID,
-    TELEGRAM_TOKEN,
     extract_pdf_text_enriched,
     fetch_screener_soup_consolidated,
-    log,
 )
+
 
 QUARTER_LINK_RE = re.compile(
     r"/company/source/quarter/(\d+)/(\d{1,2})/(\d{4})/?",

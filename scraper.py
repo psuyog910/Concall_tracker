@@ -46,10 +46,17 @@ except ImportError:
 
 import google.generativeai as genai
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parent
+from config import (
+    BASE_DIR,
+    GEMINI_API_KEY,
+    GEMINI_GEMMA_FALLBACK,
+    GEMINI_MODEL_FALLBACKS,
+    GEMINI_MODEL_PRIORITY,
+    TELEGRAM_CHAT_ID,
+    TELEGRAM_TOKEN,
+    log,
+)
+
 STOCKS_FILE = BASE_DIR / "stocks.txt"
 STATE_FILE = BASE_DIR / "last_concall.json"
 SUMMARIES_DIR = BASE_DIR / "summaries"
@@ -58,73 +65,52 @@ PROMPT_FILE = BASE_DIR / "prompt.md"
 
 SCREENER_URL = "https://www.screener.in/company/{symbol}/"
 
-# Forcefully strip all invisible/illegal characters (even inside the string)
-GEMINI_API_KEY = re.sub(r'[^A-Za-z0-9_\-\.]', '', os.environ.get("GEMINI_API_KEY", ""))
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-
 # If True, saves summaries but DOES NOT send Telegram alerts.
 SILENT_MODE = False
 
 # If True, skips PDF/AI steps and only updates the date memory (Seed Mode).
-# Controlled via SEED_ONLY env var — set it in GitHub Actions for the seeding run,
-# then remove it. No code edits needed.
+# Controlled via SEED_ONLY env var.
 SEED_ONLY = os.environ.get("SEED_ONLY", "false").lower() == "true"
 
 MAX_RETRIES = 3
 RETRY_DELAY = 5  # seconds
 
-# Shared Gemini try-order for concall summaries and quarterly JSON (priority first).
-# See https://ai.google.dev/gemini-api/docs/models
-GEMINI_MODEL_PRIORITY: tuple[str, ...] = (
-    "gemini-3.1-pro-preview",
-    "gemini-3.1-flash-lite-preview",
-    "gemini-3-flash-preview",
-)
-GEMINI_MODEL_FALLBACKS: tuple[str, ...] = (
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-pro",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-)
-GEMINI_GEMMA_FALLBACK: tuple[str, ...] = (
-    "gemma-4-31b-it",
-    "gemma-4-26b-a4b-it",
-)
-
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-log = logging.getLogger("concall-monitor")
 ALERTS_SENT_THIS_RUN: set[tuple[str, str]] = set()
 
 # ---------------------------------------------------------------------------
 # HTTP helpers
 # ---------------------------------------------------------------------------
 
+
+# Connection pool: keep-alive sockets reused across requests (faster for sequential calls)
+_adapter = requests.adapters.HTTPAdapter(
+    pool_connections=4,
+    pool_maxsize=8,
+    max_retries=0,  # We handle retries ourselves in _get()
+)
 SESSION = requests.Session()
+SESSION.mount("https://", _adapter)
+SESSION.mount("http://", _adapter)
 SESSION.headers.update({
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
+    "Accept-Encoding": "gzip, deflate",
+    "Connection": "keep-alive",
 })
+
+# Tight timeouts: (connect_timeout, read_timeout) — avoids hanging indefinitely
+_HTTP_TIMEOUT = (10, 20)
 
 
 def _get(url: str, **kwargs) -> requests.Response:
-    """GET with retries."""
+    """GET with retries and a strict timeout to avoid hangs."""
+    kwargs.setdefault("timeout", _HTTP_TIMEOUT)
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = SESSION.get(url, timeout=30, **kwargs)
+            resp = SESSION.get(url, **kwargs)
             resp.raise_for_status()
             return resp
         except requests.RequestException as exc:
@@ -582,6 +568,7 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
         + list(GEMINI_GEMMA_FALLBACK)
         + list(GEMINI_MODEL_FALLBACKS)
     )
+
 
     for model_name in models_to_try:
         log.info("Trying Gemini model: %s", model_name)
@@ -1109,8 +1096,8 @@ def main() -> None:
         except Exception as exc:
             log.error("Unhandled quarterly error for %s: %s", symbol, exc, exc_info=True)
 
-        # Be polite to Screener.in
-        time.sleep(2)
+        # Be polite to Screener.in — 1s is enough since requests are sequential
+        time.sleep(1)
 
     save_state(state)
     save_quarterly_state(qstate)
