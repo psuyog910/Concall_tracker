@@ -27,6 +27,8 @@ from config import (
     GEMINI_GEMMA_FALLBACK,
     GEMINI_MODEL_FALLBACKS,
     GEMINI_MODEL_PRIORITY,
+    NVIDIA_MODELS,
+    NVIDIA_API_KEY,
     TELEGRAM_CHAT_ID,
     TELEGRAM_TOKEN,
     log,
@@ -212,9 +214,11 @@ _JSON_ONLY_SUFFIX = (
 )
 
 # (model_id, supports_application_json_mime)
-# Same priority as concall pipeline (scraper.GEMINI_*); Gemma last — JSON MIME unreliable.
+# Priority: Gemini -> NVIDIA -> Gemini Fallbacks -> Gemma Fallbacks
 _QUARTERLY_MODEL_TRIALS: tuple[tuple[str, bool], ...] = tuple(
-    (m, True) for m in GEMINI_MODEL_PRIORITY + GEMINI_MODEL_FALLBACKS
+    (m, True) for m in GEMINI_MODEL_PRIORITY
+) + tuple((m, False) for m in NVIDIA_MODELS) + tuple(
+    (m, True) for m in GEMINI_MODEL_FALLBACKS
 ) + tuple((m, False) for m in GEMINI_GEMMA_FALLBACK)
 
 
@@ -579,23 +583,63 @@ def build_quarterly_payload(
 
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
-                    response = model.generate_content(prompt)
-                    raw = _gemini_response_text(response)
+                    if model_name in NVIDIA_MODELS:
+                        if not NVIDIA_API_KEY:
+                            log.warning("NVIDIA_API_KEY not set - skipping model %s", model_name)
+                            quota_skip_model = True
+                            break
+                        
+                        try:
+                            from openai import OpenAI
+                        except ImportError:
+                            log.error("openai package not installed.")
+                            quota_skip_model = True
+                            break
+                            
+                        client = OpenAI(
+                            base_url="https://integrate.api.nvidia.com/v1",
+                            api_key=NVIDIA_API_KEY
+                        )
+                        completion = client.chat.completions.create(
+                            model=model_name,
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.15,
+                            max_tokens=8192,
+                            extra_body={"chat_template_kwargs": {"enable_thinking": True, "clear_thinking": False}},
+                            stream=True
+                        )
+                        raw = ""
+                        for chunk in completion:
+                            if not getattr(chunk, "choices", None):
+                                continue
+                            if len(chunk.choices) == 0 or getattr(chunk.choices[0], "delta", None) is None:
+                                continue
+                            delta = chunk.choices[0].delta
+                            if getattr(delta, "content", None) is not None:
+                                raw += delta.content
+                                
+                    else:
+                        response = model.generate_content(prompt)
+                        raw = _gemini_response_text(response)
 
                     if not raw:
-                        finish_reason = "UNKNOWN"
-                        if hasattr(response, "candidates") and response.candidates:
-                            finish_reason = response.candidates[0].finish_reason.name
-
-                        log.warning(
-                            "Quarterly model %s attempt %d/%d: empty output (reason: %s). "
-                            "Note: Gemma requires json_mime=false.",
-                            model_name,
-                            attempt,
-                            MAX_RETRIES,
-                            finish_reason,
-                        )
-                        _log_prompt_feedback(response)
+                        if model_name not in NVIDIA_MODELS:
+                            finish_reason = "UNKNOWN"
+                            if hasattr(response, "candidates") and response.candidates:
+                                finish_reason = response.candidates[0].finish_reason.name
+    
+                            log.warning(
+                                "Quarterly model %s attempt %d/%d: empty output (reason: %s). "
+                                "Note: Gemma requires json_mime=false.",
+                                model_name,
+                                attempt,
+                                MAX_RETRIES,
+                                finish_reason,
+                            )
+                            _log_prompt_feedback(response)
+                        else:
+                            log.warning("Quarterly model %s attempt %d/%d: empty output.", model_name, attempt, MAX_RETRIES)
+                            
                         if attempt < MAX_RETRIES:
                             time.sleep(RETRY_DELAY * attempt)
                         continue

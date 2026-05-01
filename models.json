@@ -16,5 +16,8 @@
   "GEMINI_GEMMA_FALLBACK": [
     "gemma-4-31b-it",
     "gemma-4-26b-a4b-it"
+  ],
+  "NVIDIA_MODELS": [
+    "z-ai/glm4.7"
   ]
 }

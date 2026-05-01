@@ -52,6 +52,8 @@ from config import (
     GEMINI_GEMMA_FALLBACK,
     GEMINI_MODEL_FALLBACKS,
     GEMINI_MODEL_PRIORITY,
+    NVIDIA_MODELS,
+    NVIDIA_API_KEY,
     TELEGRAM_CHAT_ID,
     TELEGRAM_TOKEN,
     log,
@@ -597,13 +599,65 @@ def summarise_transcript(transcript_text: str) -> Optional[str]:
     # Try models in priority order (quota may be per-model on free tier).
     models_to_try = (
         list(GEMINI_MODEL_PRIORITY)
+        + list(NVIDIA_MODELS)
         + list(GEMINI_GEMMA_FALLBACK)
         + list(GEMINI_MODEL_FALLBACKS)
     )
 
-
     for model_name in models_to_try:
-        log.info("Trying Gemini model: %s", model_name)
+        log.info("Trying model: %s", model_name)
+        
+        if model_name in NVIDIA_MODELS:
+            if not NVIDIA_API_KEY:
+                log.warning("NVIDIA_API_KEY not set - skipping model %s", model_name)
+                continue
+            
+            try:
+                from openai import OpenAI
+            except ImportError:
+                log.error("openai package not installed. Run: pip install openai")
+                continue
+                
+            client = OpenAI(
+                base_url="https://integrate.api.nvidia.com/v1",
+                api_key=NVIDIA_API_KEY
+            )
+            
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    completion = client.chat.completions.create(
+                        model=model_name,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.2,
+                        max_tokens=8192,
+                        extra_body={"chat_template_kwargs": {"enable_thinking": True, "clear_thinking": False}},
+                        stream=True
+                    )
+                    
+                    full_response = ""
+                    for chunk in completion:
+                        if not getattr(chunk, "choices", None):
+                            continue
+                        if len(chunk.choices) == 0 or getattr(chunk.choices[0], "delta", None) is None:
+                            continue
+                        delta = chunk.choices[0].delta
+                        
+                        # We don't save reasoning to the summary file to keep it clean,
+                        # but we pull it so the stream consumes properly.
+                        # If we wanted to include reasoning, we'd append it here.
+                        if getattr(delta, "content", None) is not None:
+                            full_response += delta.content
+
+                    summary = clean_summary_output(full_response)
+                    log.info("NVIDIA NIM summary generated with %s – %d chars", model_name, len(summary))
+                    return summary
+                except Exception as exc:
+                    log.warning("NVIDIA Model %s attempt %d/%d failed: %s", model_name, attempt, MAX_RETRIES, exc)
+                    if attempt < MAX_RETRIES:
+                        time.sleep(RETRY_DELAY * attempt)
+            continue # Move to next model if NVIDIA attempts fail
+
+        # Gemini API
         model = genai.GenerativeModel(
             model_name,
             generation_config={"temperature": 0.2}

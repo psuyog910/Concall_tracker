@@ -31,8 +31,10 @@ _load_env()
 
 # API Keys and Secrets (Cleaned)
 GEMINI_API_KEY = re.sub(r'[^A-Za-z0-9_\-\.]', '', os.environ.get("GEMINI_API_KEY", ""))
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "").strip()
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+
 
 
 def load_models_config():
@@ -41,6 +43,7 @@ def load_models_config():
         "GEMINI_MODEL_PRIORITY": [],
         "GEMINI_MODEL_FALLBACKS": [],
         "GEMINI_GEMMA_FALLBACK": [],
+        "NVIDIA_MODELS": [],
     }
     
     models_file = BASE_DIR / "models.json"
@@ -63,3 +66,5 @@ MODELS = load_models_config()
 GEMINI_MODEL_PRIORITY = tuple(MODELS["GEMINI_MODEL_PRIORITY"])
 GEMINI_MODEL_FALLBACKS = tuple(MODELS["GEMINI_MODEL_FALLBACKS"])
 GEMINI_GEMMA_FALLBACK = tuple(MODELS["GEMINI_GEMMA_FALLBACK"])
+NVIDIA_MODELS = tuple(MODELS["NVIDIA_MODELS"])
+
