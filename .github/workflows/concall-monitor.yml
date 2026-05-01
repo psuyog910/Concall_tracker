@@ -85,6 +85,6 @@ jobs:
         run: |
           git config user.name "Concall Bot"
           git config user.email "bot@concall-monitor.local"
-          git add last_concall.json last_quarterly.json summaries/ quarterly_cards/
+          git add last_concall.json last_quarterly.json
           # Only commit if there are changes
           git diff --staged --quiet || (git commit -m "🤖 Update concall state and summaries [$(date -u +'%Y-%m-%d %H:%M UTC')]" && git pull --rebase origin main && git push)
