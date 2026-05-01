@@ -417,14 +417,46 @@ def extract_pdf_text_enriched(pdf_url: str) -> Optional[dict[str, Any]]:
     Keys: ``text``, ``pages``, ``warn_scan_only`` (bool), ``ocr_used`` (bool).
     """
     log.info("Downloading PDF: %s", pdf_url)
-    try:
-        resp = _get(pdf_url)
-    except RuntimeError:
-        log.error("Failed to download PDF: %s", pdf_url)
-        return None
+    
+    data = b""
+    # HACK: Retry with browser-like headers if we get something that isn't a PDF 
+    # (BSE often serves an HTML "Access Denied" page to basic scrapers).
+    for attempt in range(1, 4):
+        try:
+            current_url = pdf_url
+            if attempt == 2 and pdf_url.endswith("/"):
+                current_url = pdf_url.rstrip("/")
+            elif attempt == 3 and not pdf_url.endswith("/"):
+                current_url = pdf_url + "/"
 
-    data = resp.content
+            # Enhanced headers to mimic a real browser visiting from Screener
+            headers = {
+                "Referer": "https://www.screener.in/",
+                "Upgrade-Insecure-Requests": "1",
+                "Accept": "application/pdf,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            
+            resp = _get(current_url, headers=headers)
+            temp_data = resp.content
+            
+            # Verify we actually got a PDF
+            if temp_data and (temp_data.startswith(b"%PDF") or b"%PDF" in temp_data[:1024]):
+                data = temp_data
+                break
+            
+            log.warning(
+                "Attempt %d: Downloaded content for %s is not a valid PDF (length: %d). "
+                "Likely a bot-block HTML page. Retrying with delay...",
+                attempt, current_url, len(temp_data) if temp_data else 0
+            )
+            time.sleep(6 * attempt) 
+        except Exception as exc:
+            log.warning("Attempt %d download failed for %s: %s", attempt, pdf_url, exc)
+            time.sleep(5 * attempt)
+
     if not data:
+        log.error("Failed to download a valid PDF from %s after %d attempts", pdf_url, 3)
         return None
 
     pp_text, pp_pages = _pdfplumber_extract_pdf_bytes(data)
