@@ -9,9 +9,8 @@ STRICT RULES:
 - Provide detailed, insightful context for each point to give the reader a deep understanding. Do not make the bullet points too brief.
 - Use standard markdown list syntax (`-` or `*`) for bullet points.
 - Use emojis only for section headers to improve readability.
-- DO NOT include any chain-of-thought, reasoning, `<think>` tags, or conversational filler.
 - DO NOT regurgitate the prompt, instructions, or self-checks.
-- Output strictly in the exact markdown format below — NO extra text before or after the markdown. Your response MUST start EXACTLY with `## 📊 Financial Performance`.
+- Output the exact markdown format below. You may use internal `<think>` tags BEFORE the final markdown output to reason about the numbers if needed, but the final visible output MUST start EXACTLY with `## 📊 Financial Performance`.
 
 ## 📊 Financial Performance
 Start with a small, clear markdown table for key metrics. If a metric is not discussed, omit the row or write "N/A".

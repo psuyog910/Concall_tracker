@@ -778,7 +778,15 @@ def render_quarterly_card(
     if basis_note:
         draw.text((pad, y_line), basis_note, fill=GREY, font=f_small)
         y_line += 16
-    unit_note = "₹ Cr | EPS in ₹"
+    raw_unit = str(payload.get("unit") or "₹ Crores").strip()
+    # Clean up common variations from LLM
+    if "lakhs" in raw_unit.lower():
+        unit_note = "₹ Lakhs | EPS in ₹"
+    elif "millions" in raw_unit.lower():
+        unit_note = "₹ Millions | EPS in ₹"
+    else:
+        unit_note = "₹ Cr | EPS in ₹"
+        
     draw.text(
         (W - pad - draw.textlength(unit_note, font=f_small), y_block_top + 2),
         unit_note,
