@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "last_updated": "2026-09-05",
+  "watchlist_source": "stocks.txt",
+  "completed_updates": {
+    "quarterly": {
+      "PERSISTENT|2026-06": "Revenue $452.4M; +16.1% YoY, +3.8% QoQ; EBIT margin 16.0%; PAT Rs 483 Cr; record TCV $1.146B. Key watch: forex-related PAT pressure.",
+      "TEGA|2026-06": "Revenue about Rs 1,720 Cr; adjusted EBITDA about Rs 264 Cr; legacy consumables revenue +36%, 24.1% EBITDA margin. Key watch: Molycop integration.",
+      "ACE|2026-06": "Total income Rs 840.3 Cr, +19.5%; EBITDA Rs 172.5 Cr, +19.9%; PAT Rs 119.5 Cr, +22.3%; construction-equipment revenue +22%, volumes +17.25%.",
+      "FIEMIND|2026-06": "Sales Rs 769.9 Cr, +18.6%; EBITDA Rs 104.1 Cr; PAT Rs 65.2 Cr, +16.3%; LED lighting 63% of business; Q1 capex Rs 41.2 Cr.",
+      "MEDIASSIST|2026-06": "Operating revenue Rs 236.5 Cr, +24.1%; PAT Rs 27.6 Cr, +21.9%; operating EBITDA margin 20.3%; SaaS/technology revenue +55.5%. Watch retention and integration.",
+      "CAMS|2026-06": "Revenue Rs 395 Cr, +11.5%; PAT Rs 128 Cr, +17.3%; EBIT margin about 50.5%; non-MF revenue +28.4%.",
+      "CERA|2026-06": "Revenue Rs 486 Cr, +19.5%; faucets +25%, tiles +22%; EBITDA margin 10.1%. Working-capital cycle improved 75 to 50 days; cash Rs 943 Cr.",
+      "BLUESTARCO|2026-06": "Revenue Rs 3,378 Cr, +13.3%; PAT -15.2% to Rs 102.5 Cr; operating margin 5.18%; unitary-products margin 2.94%. Key watch: margin recovery.",
+      "POLYMED|2026-06": "Revenue Rs 525 Cr, +30.2%; EBITDA margin 30.2% versus 26.0%; PAT -7.6% to Rs 86 Cr due to finance/other-income effects.",
+      "AIAENG|2026-06": "Revenue Rs 1,168 Cr, +12.4%; EBITDA margin about 26.4%; PAT -1.4%. Freight-outward expense was a major drag.",
+      "BERGEPAINT|2026-06": "Revenue Rs 3,584 Cr, +12.0%; reported PAT Rs 405 Cr, +28.6%; OPM improved. Headline PAT benefited from exceptional-item comparison.",
+      "MOLDTKPAC|2026-06": "Revenue Rs 300.5 Cr, +24.9%; EBITDA Rs 56.4 Cr, +19.1%; PAT Rs 25.6 Cr, +14.2%; operating margin 18.8% versus 19.7%.",
+      "CRISIL|2026-06": "Q2 2026 operating income Rs 1,075 Cr, +27.6%; PBT +24.4%; PAT Rs 216.5 Cr, +26.2%; H1 operating income +28.8% and PAT +35.7%.",
+      "VBL|2026-06": "June-2026 quarter EPS Rs 4.50 versus Rs 4.35 expected; revenue Rs 84.51B versus Rs 86.30B expected. Earnings beat, revenue miss."
+    },
+    "concall": {}
+  },
+  "rules": {
+    "dedupe_key": "symbol + update_type + reporting_period_or_date",
+    "do_not_repeat_completed_updates": true,
+    "new_period_creates_new_update": true,
+    "material_followup_can_reopen": true,
+    "quarterly_and_concall_are_tracked_separately": true
+  }
+}
