@@ -19,7 +19,23 @@
       "CRISIL|2026-06": "Q2 2026 operating income Rs 1,075 Cr, +27.6%; PBT +24.4%; PAT Rs 216.5 Cr, +26.2%; H1 operating income +28.8% and PAT +35.7%.",
       "VBL|2026-06": "June-2026 quarter EPS Rs 4.50 versus Rs 4.35 expected; revenue Rs 84.51B versus Rs 86.30B expected. Earnings beat, revenue miss."
     },
-    "concall": {}
+    "concall": {
+      "PERSISTENT|2026-06|call": "Q1 FY27 call summarized: revenue $452.4M +16.1% YoY, EBIT margin 16.0%, PAT ₹483 Cr +13.7%, record TCV $1.146B; strategic $650M+ deal and Nagarro combination are key catalysts; forex pressured QoQ PAT.",
+      "TEGA|2026-06|call": "Q1 FY27 call summarized: consolidated revenue ₹1,720 Cr and adjusted EBITDA ₹264 Cr/15% margin including one month Molycop; legacy consumables +36% with 24.1% margin; Molycop synergies and deleveraging are key watch items.",
+      "GRAVITA|2026-06|call": "Q1 FY27 call summarized: revenue ₹1,475 Cr +42%, EBITDA ₹145 Cr +29%, PAT ₹106.4 Cr +14%; copper revenue ₹376 Cr at 50% utilization; lead supply disruption and 95-day working capital are key risks.",
+      "IKS|2026-06|call": "Q1 FY27 call summarized: revenue ₹893 Cr +21%, EBITDA ₹294 Cr, PAT ₹193 Cr +28%; strong operating leverage; TruBridge integration expected to reset margins to ~26–27% before recovery.",
+      "MEDIASSIST|2026-06|call": "Q1 FY27 call summarized: operating revenue ₹236.5 Cr +24.1%, PAT ₹27.6 Cr +21.9%, operating EBITDA margin 20.3%; SaaS/technology growth +55.5%; retention and Paramount integration remain watch items.",
+      "JYOTHYLAB|2026-06|call": "Q1 FY27 call summarized: ex-Pril/FA value growth 8.1%, volume 5.3%; gross margin 38.5% (-950 bps) and EBITDA margin 8.4% (-820 bps) due to crude-linked input inflation; management expects H2 margin recovery.",
+      "CERA|2026-06|call": "Q1 FY27 call summarized: revenue ₹486 Cr +19.5%; sanitaryware +14%, faucets +25%; working-capital cycle improved 75 to 50 days; cash ₹943 Cr and FY27 capex ~₹43 Cr; margin recovery remains key.",
+      "FIEMIND|2026-06|call": "Q1 FY27 call summarized: revenue ₹769.9 Cr +18.6%, EBITDA ₹104.1 Cr, margin 13.5%, PAT ₹65.2 Cr +16%; strong two-wheeler-linked demand and new model launches support growth.",
+      "AIAENG|2026-06|call": "Q1 FY27 call summarized: volume 64,644 tons, revenue ₹1,153 Cr, EBITDA ₹424 Cr, PAT ₹301 Cr; demand intact but freight/mix pressures remain key earnings risks.",
+      "INDIGOPNTS|2026-06|call": "Q1 FY27 call summarized: revenue ₹350 Cr +19%, EBITDA ₹61.9 Cr +42%, margin 17.7%, PAT ₹42.4 Cr +61%; double-digit volume growth across products and improving raw-material backdrop.",
+      "SAREGAMA|2026-06|call": "Q1 FY27 call summarized: revenue ₹263.6 Cr +27%, adjusted EBITDA ₹112.4 Cr +69%; music vertical +39%; strong operating leverage and catalogue monetization were the main positives.",
+      "VAIBHAVGBL|2026-06|call": "Q1 FY27 call summarized: revenue ₹917 Cr +12.7%, EBITDA ₹102 Cr +37%, margin 11%, PAT ₹56 Cr +50%; digital sales 45% of B2C; constant-currency demand was broadly flat.",
+      "ICEMAKE|2026-06|call": "Q1 FY27 call summarized: revenue ₹178.9 Cr +60.4%, EBITDA ₹3.09 Cr/1.7% margin, PAT loss ₹1.65 Cr; proposed ₹180 Cr Galilei investment; raw-material costs and capability investments pressured profitability.",
+      "TIINDIA|2026-06|call": "Q1 FY27 call summarized: standalone revenue ₹2,366 Cr vs ₹2,007 Cr YoY; PBT ₹213 Cr vs ₹222 Cr; ROIC 41% vs 39%; free cash flow ₹174 Cr; engineering revenue ₹1,566 Cr vs ₹1,298 Cr.",
+      "ELGIEQUIP|2026-06|call": "Q1 FY27 call summarized: revenue +23% YoY, EBITDA +28%, PAT margin 9.7%; India revenue +28% and North America +37%; management remains confident on margins despite raw-material pressure."
+    }
   },
   "rules": {
     "dedupe_key": "symbol + update_type + reporting_period_or_date",
