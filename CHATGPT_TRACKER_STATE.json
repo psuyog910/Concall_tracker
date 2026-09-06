@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "last_updated": "2026-09-05",
+  "last_updated": "2026-09-06",
   "watchlist_source": "stocks.txt",
   "completed_updates": {
     "quarterly": {
@@ -43,5 +43,6 @@
     "new_period_creates_new_update": true,
     "material_followup_can_reopen": true,
     "quarterly_and_concall_are_tracked_separately": true
-  }
+  },
+  "last_run_note": "Manual run on 2026-09-06: no new material stock-specific quarterly/concall update identified since the previous tracker run; pending watchlist items remain pending."
 }
