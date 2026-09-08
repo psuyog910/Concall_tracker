@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "last_updated": "2026-09-06",
+  "last_updated": "2026-09-08",
   "watchlist_source": "stocks.txt",
   "completed_updates": {
     "quarterly": {
@@ -34,7 +34,12 @@
       "VAIBHAVGBL|2026-06|call": "Q1 FY27 call summarized: revenue ₹917 Cr +12.7%, EBITDA ₹102 Cr +37%, margin 11%, PAT ₹56 Cr +50%; digital sales 45% of B2C; constant-currency demand was broadly flat.",
       "ICEMAKE|2026-06|call": "Q1 FY27 call summarized: revenue ₹178.9 Cr +60.4%, EBITDA ₹3.09 Cr/1.7% margin, PAT loss ₹1.65 Cr; proposed ₹180 Cr Galilei investment; raw-material costs and capability investments pressured profitability.",
       "TIINDIA|2026-06|call": "Q1 FY27 call summarized: standalone revenue ₹2,366 Cr vs ₹2,007 Cr YoY; PBT ₹213 Cr vs ₹222 Cr; ROIC 41% vs 39%; free cash flow ₹174 Cr; engineering revenue ₹1,566 Cr vs ₹1,298 Cr.",
-      "ELGIEQUIP|2026-06|call": "Q1 FY27 call summarized: revenue +23% YoY, EBITDA +28%, PAT margin 9.7%; India revenue +28% and North America +37%; management remains confident on margins despite raw-material pressure."
+      "ELGIEQUIP|2026-06|call": "Q1 FY27 call summarized: revenue +23% YoY, EBITDA +28%, PAT margin 9.7%; India revenue +28% and North America +37%; management remains confident on margins despite raw-material pressure.",
+      "GANECOS|2026-06|call": "Q1 FY27 call summarized: consolidated revenue ₹423.7 Cr +25.7% YoY; EBITDA ₹59.8 Cr, 14.1% margin; PAT ₹29.03 Cr +170% YoY; production +3.8% QoQ while sales volume -11.2% QoQ; FY27 EBITDA guidance ₹225–250 Cr; Warangal expansion and FSSAI approval are key watch items."
+    },
+    "material_disclosure": {
+      "IEX|2026-08|power_market_update": "August 2026 power-market update: record 13,938 MU traded, +20.2% YoY; Day-Ahead Market +22% in average price and Green Market volume +17.3%. REC trading fell sharply.",
+      "BLUESTARCO|2026-09-03|medtech_sale_completion": "Blue Star announced completion of sale and transfer of its MedTech business by Blue Star Engineering & Electronics Limited on September 3, 2026."
     }
   },
   "rules": {
@@ -44,5 +49,5 @@
     "material_followup_can_reopen": true,
     "quarterly_and_concall_are_tracked_separately": true
   },
-  "last_run_note": "Manual run on 2026-09-06: no new material stock-specific quarterly/concall update identified since the previous tracker run; pending watchlist items remain pending."
+  "last_run_note": "Scheduled run on 2026-09-08: found one new unrecorded Q1 FY27 concall (GANECOS) and two material official disclosures (IEX August power-market update; Blue Star MedTech sale completion). Routine investor-meeting notices were not treated as material updates."
 }
