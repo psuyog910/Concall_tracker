@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "last_updated": "2026-09-08",
+  "last_updated": "2026-09-09",
   "watchlist_source": "stocks.txt",
   "completed_updates": {
     "quarterly": {
@@ -39,7 +39,8 @@
     },
     "material_disclosure": {
       "IEX|2026-08|power_market_update": "August 2026 power-market update: record 13,938 MU traded, +20.2% YoY; Day-Ahead Market +22% in average price and Green Market volume +17.3%. REC trading fell sharply.",
-      "BLUESTARCO|2026-09-03|medtech_sale_completion": "Blue Star announced completion of sale and transfer of its MedTech business by Blue Star Engineering & Electronics Limited on September 3, 2026."
+      "BLUESTARCO|2026-09-03|medtech_sale_completion": "Blue Star announced completion of sale and transfer of its MedTech business by Blue Star Engineering & Electronics Limited on September 3, 2026.",
+      "BAJFINANCE|2026-09-08|truefan_ai_stake": "Bajaj Finance acquired a 5% stake in TrueFan AI (Hogwarts E-learning Universe Pvt. Ltd.), an AI-powered video-generation platform, as part of Finserv Intelligence's strategic applied-research and innovation initiative."
     }
   },
   "rules": {
@@ -49,5 +50,5 @@
     "material_followup_can_reopen": true,
     "quarterly_and_concall_are_tracked_separately": true
   },
-  "last_run_note": "Scheduled run on 2026-09-08: found one new unrecorded Q1 FY27 concall (GANECOS) and two material official disclosures (IEX August power-market update; Blue Star MedTech sale completion). Routine investor-meeting notices were not treated as material updates."
+  "last_run_note": "Scheduled run on 2026-09-09: found one new material official disclosure for BAJFINANCE — acquisition of 5% stake in TrueFan AI on September 8, 2026. Routine investor-meeting notices, AGM/e-voting items, and non-material subsidiary/administrative disclosures were not treated as reportable updates."
 }
