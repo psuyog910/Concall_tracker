@@ -50,5 +50,5 @@
     "material_followup_can_reopen": true,
     "quarterly_and_concall_are_tracked_separately": true
   },
-  "last_run_note": "Scheduled run on 2026-09-09: found one new material official disclosure for BAJFINANCE — acquisition of 5% stake in TrueFan AI on September 8, 2026. Routine investor-meeting notices, AGM/e-voting items, and non-material subsidiary/administrative disclosures were not treated as reportable updates."
+  "last_run_note": "Manual run on 2026-09-09 at 11:24 IST: no new material watchlist update found beyond updates already recorded in completed_updates. IEX AGM was pre-announced and is not treated as a new material earnings/concall update."
 }
