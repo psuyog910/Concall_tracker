@@ -1,0 +1,18 @@
+{
+  "run_id": "2026-09-13T09:02:02+05:30",
+  "status": "error",
+  "new_updates_found": 7,
+  "updates": ["ASIANPAINT|quarterly|2026-06","LTFOODS|quarterly|2026-06","ETHOSLTD|quarterly|2026-06","NESCO|quarterly|2026-06","RATNAMANI|quarterly|2026-06","UDS|quarterly|2026-06","TECHNOE|quarterly|2026-06"],
+  "stocks_read": true,
+  "state_read": true,
+  "research_attempted": true,
+  "consolidated_first": true,
+  "deduplication_applied": true,
+  "report_generated": true,
+  "delivery_generated": "daily_digest.pdf",
+  "github_archival": "failed",
+  "github_archival_reason": "The available GitHub binary blob interface requires the binary payload as an inline base64 string; the scheduled runtime could generate the PNG/PDF files locally but could not pass their binary contents to the GitHub blob writer. No claim of binary archival was made.",
+  "state_updated": false,
+  "report_paths": [],
+  "notes": "Seven newly detected quarterly updates were found. The PDF was generated for delivery, but tracker state was intentionally not marked completed because the required persistent binary archive could not be verified."
+}
