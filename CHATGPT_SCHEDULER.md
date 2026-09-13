@@ -1,56 +1,123 @@
 # ChatGPT Scheduler — Concall Tracker
 
-## Source of truth
-- Read `stocks.txt` for the current Indian-stock watchlist.
-- Read `CHATGPT_TRACKER_STATE.json` before every run. It is the scheduler's persistent memory.
-- `last_quarterly.json` and `last_concall.json` belong to the legacy Python app; use them only as supporting context.
+## Scope and branch lock
+- This workflow operates **only** on the `chatgpt-tracker` branch.
+- Never read from, write to, create commits on, or compare against `main`.
+- The repository is `psuyog910/Concall_tracker`.
+- Never modify `quarterly_monitor.py`, `concall_monitor.py`, `last_quarterly.json`, `last_concall.json`, or other legacy application files unless explicitly requested.
 
-## Anti-duplication
-An update is uniquely identified by **symbol + update type + reporting period/date**.
+## Required run audit
+At the beginning of every run, record:
+- Run timestamp in IST/ISO-8601.
+- Unique run ID.
+- Target branch: `chatgpt-tracker`.
 
-If the exact update is already in `CHATGPT_TRACKER_STATE.json` under `completed_updates`, do not regenerate it.
+At the end, audit these exact checkpoints:
+1. Scheduler prompt execution reached.
+2. `stocks.txt` read successfully.
+3. `CHATGPT_TRACKER_STATE.json` read successfully.
+4. Research attempted.
+5. Consolidated-first rule applied.
+6. Exact-key deduplication applied.
+7. Report generation status.
+8. Report delivery status.
+9. GitHub archival/status-update status.
 
-Create a new update only for:
-1. a new reporting period;
-2. a genuinely new concall transcript;
-3. a material correction/restatement; or
-4. a meaningful new disclosure that changes the previous conclusion.
+If any required checkpoint fails, return `ERROR` with the failed step, likely reason, and whether any changes were safely persisted. Do not claim success.
 
-After delivering a new update, record it in `CHATGPT_TRACKER_STATE.json` so future runs know it is complete.
+## Required inputs
+Before research, fetch both files from **`ref=chatgpt-tracker`**:
+- `stocks.txt`
+- `CHATGPT_TRACKER_STATE.json`
 
-## Quarterly result image
-Use the established Concall Tracker quarterly-card hierarchy:
-1. Company + quarter
-2. KPI strip
-3. Current / previous quarter / year-ago financial table with QoQ and YoY
-4. Key positives
-5. Key negatives / risks
-6. Management commentary
-7. Guidance / outlook
-8. Investor takeaway
-9. Source / verification note
+If either file cannot be read, stop research and report the inaccessible file. Never infer or fabricate watchlist/state data.
 
-## Concall image
-Use the same visual language, typography, spacing, dark theme, rounded cards and information hierarchy as the quarterly result image. Use:
-1. Company + quarter + call date
-2. Headline management message
-3. Key management takeaways
-4. Demand & business outlook
-5. Margins & costs
-6. Deals / pipeline / order book where relevant
-7. Capital allocation / capex / M&A where relevant
-8. Key positives
-9. Key concerns / risks raised in the call
-10. Overall investor takeaway
-11. Primary source links
+## State and deduplication
+Use `CHATGPT_TRACKER_STATE.json` as the persistent memory.
 
-Generate a clean, professional PNG image for both quarterly and concall updates.
+The canonical deduplication key is:
 
-## Evidence rules
-Prefer official company filings, investor presentations, stock-exchange disclosures and official transcripts. Clearly separate reported facts from interpretation. Never invent figures, expectations or guidance.
+`symbol + update_type + reporting_period_or_date`
 
-## Scheduler workflow
-Each day, scan the watchlist for meaningful new quarterly results, earnings releases, investor presentations, concall transcripts and official disclosures. Only report items not already completed in the state file. For each new item, deliver the appropriate PNG card plus a concise text summary and primary source links, then persist the completion record.
+Rules:
+- Quarterly results and concall updates are independent update types.
+- Never regenerate an exact key already present in `completed_updates`.
+- A new reporting period is a new update.
+- A new actual concall/transcript is a new update even for the same quarter.
+- A material correction/restatement or meaningful new disclosure may create a new update with a distinct date/type key.
+- Deduplicate candidates before generating any report.
+- Do not mark an update complete until its report has been generated, archived, and verified.
 
-## Safety boundary
-The ChatGPT scheduler workspace is the `chatgpt-tracker` branch. Do not modify the legacy Python application files or its state unless explicitly instructed. `main` is protected and should remain the production/original branch.
+## Research and evidence
+Research the current watchlist for genuinely new or materially changed:
+- Quarterly results.
+- Earnings releases and investor presentations.
+- Actual earnings/conference-call transcripts or recordings.
+- Official company and stock-exchange disclosures.
+
+Prefer primary sources. Separate reported facts from interpretation. Do not invent unavailable figures, commentary, guidance, dates, or source links.
+
+### Consolidated-first rule
+For quarterly financials:
+1. Find and evaluate consolidated results first.
+2. Use consolidated figures whenever available.
+3. Use standalone figures only if consolidated results are unavailable.
+4. Never substitute standalone figures when consolidated results exist.
+
+A quarterly result must not be classified as a concall update unless an actual concall, earnings-call transcript, recording, or management-call source is available.
+
+## Report generation
+For each genuinely new material update, generate a professional, phone-readable PNG card in the established Concall Tracker style.
+
+Quarterly card must contain:
+1. Company and quarter.
+2. KPI strip.
+3. Current / previous-quarter / year-ago financial comparison where available.
+4. Positives.
+5. Risks.
+6. Management commentary.
+7. Outlook/guidance.
+8. Investor takeaway.
+9. Primary-source verification note.
+
+Concall card must contain:
+1. Company, quarter, and call date.
+2. Headline management message.
+3. Management takeaways.
+4. Demand and outlook.
+5. Margins and costs.
+6. Deals, pipeline, or order book where relevant.
+7. Capital allocation, capex, or M&A where relevant.
+8. Positives.
+9. Risks/concerns raised in the call.
+10. Investor takeaway.
+11. Primary-source verification note.
+
+Do not use hard-coded or previously generated figures as evidence for a new run. Every displayed number must be traceable to the current research evidence.
+
+## Delivery contract
+- 1 new update: deliver only its PNG card.
+- 2 new updates: deliver only the two PNG cards.
+- More than 2 new updates: deliver only one phone-optimized PDF with one page per new card. Do not deliver individual cards, ZIP files, or a prose digest.
+- 0 new updates: reply exactly `No new material updates.` and generate no report file.
+- If any workflow step fails, return a concise error instead of claiming a report was delivered.
+
+## GitHub persistence
+If GitHub write tools are available:
+1. Save actual generated PNGs under `reports/YYYY/MM/DD/` on `chatgpt-tracker`.
+2. If there are more than two updates, save the actual combined PDF under the same date directory.
+3. Verify each saved report exists on `chatgpt-tracker` before changing state.
+4. Update `CHATGPT_TRACKER_STATE.json` only after successful report generation, archival, and verification.
+5. Write `run_status/YYYY-MM-DD.json` as the final step, containing factual run timestamp, run ID, status (`success`, `no_updates`, or `error`), counts, report paths, checkpoint results, and error details.
+6. Verify the status-file commit before claiming it was written.
+
+If binary upload or state writing is unavailable, clearly report that limitation. Do not claim archival, state persistence, or status-file creation. Never modify `main`.
+
+## Final quality-control gate
+Before responding, verify:
+- Delivered report count equals new-update count, subject to the PDF delivery rule.
+- Every report corresponds to a genuinely new, deduplicated update.
+- Consolidated-first selection was followed.
+- State was updated only after successful report generation and archival.
+- No forbidden branch or legacy file was touched.
+- The final response follows the delivery contract exactly.
