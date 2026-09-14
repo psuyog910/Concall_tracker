@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "last_updated": "2026-09-09",
+  "last_updated": "2026-09-14",
   "watchlist_source": "stocks.txt",
   "completed_updates": {
     "quarterly": {
@@ -40,7 +40,9 @@
     "material_disclosure": {
       "IEX|2026-08|power_market_update": "August 2026 power-market update: record 13,938 MU traded, +20.2% YoY; Day-Ahead Market +22% in average price and Green Market volume +17.3%. REC trading fell sharply.",
       "BLUESTARCO|2026-09-03|medtech_sale_completion": "Blue Star announced completion of sale and transfer of its MedTech business by Blue Star Engineering & Electronics Limited on September 3, 2026.",
-      "BAJFINANCE|2026-09-08|truefan_ai_stake": "Bajaj Finance acquired a 5% stake in TrueFan AI (Hogwarts E-learning Universe Pvt. Ltd.), an AI-powered video-generation platform, as part of Finserv Intelligence's strategic applied-research and innovation initiative."
+      "BAJFINANCE|2026-09-08|truefan_ai_stake": "Bajaj Finance acquired a 5% stake in TrueFan AI (Hogwarts E-learning Universe Pvt. Ltd.), an AI-powered video-generation platform, as part of Finserv Intelligence's strategic applied-research and innovation initiative.",
+      "ASIANPAINT|2026-09-07|chairman_succession": "Asian Paints appointed Leo Puri as Additional and Independent Director for five years, subject to shareholder approval; he is designated to become Chairman on January 23, 2027, succeeding R. Seshasayee.",
+      "RATNAMANI|2026-09-10|credit_rating": "CRISIL upgraded Ratnamani's long-term bank-loan rating to AA+/Stable from AA/Positive and reaffirmed A1+ short-term rating on Rs 2,200 Cr of rated facilities."
     }
   },
   "rules": {
@@ -50,5 +52,5 @@
     "material_followup_can_reopen": true,
     "quarterly_and_concall_are_tracked_separately": true
   },
-  "last_run_note": "Manual run on 2026-09-09 at 11:24 IST: no new material watchlist update found beyond updates already recorded in completed_updates. IEX AGM was pre-announced and is not treated as a new material earnings/concall update."
+  "last_run_note": "Automation run on 2026-09-14: 2 new material disclosures identified and archived on chatgpt-tracker: Asian Paints chairman succession dated 2026-09-07 and Ratnamani credit-rating upgrade dated 2026-09-10. No new quarterly-results or actual concall updates were identified after exact-state deduplication."
 }
