@@ -1,0 +1,17 @@
+{
+  "run_date": "2026-09-15",
+  "status": "error",
+  "new_updates": 1,
+  "update_keys": ["NESCO|material_disclosure|2026-09-09"],
+  "stocks_read": true,
+  "state_read": true,
+  "research_attempted": true,
+  "deduplication_applied": true,
+  "consolidated_first_applied": true,
+  "report_generated": true,
+  "report_path_attempted": "reports/2026/09/15/NESCO_MATERIAL_DISCLOSURE_2026-09-09.png",
+  "report_delivery": "not_completed",
+  "github_archival": "failed",
+  "error": "GitHub connector available for text files but binary PNG upload could not be completed/verified in this run; state was intentionally not updated.",
+  "verified_source": "Nesco Regulation 30 disclosure dated 2026-09-09 regarding Rs 2,09,72,000 NHLML penalty for project implementation delay."
+}
