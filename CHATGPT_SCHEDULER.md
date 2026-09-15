@@ -1,9 +1,9 @@
 # ChatGPT Scheduler — Concall Tracker
 
 ## Scope and branch lock
-- This workflow operates **only** on the `chatgpt-tracker` branch.
-- Never read from, write to, create commits on, or compare against `main`.
-- The repository is `psuyog910/Concall_tracker`.
+- Repository: `psuyog910/Concall_tracker`.
+- This workflow operates **only** on `chatgpt-tracker`.
+- Never read, compare against, create commits on, or modify `main`.
 - Never modify `quarterly_monitor.py`, `concall_monitor.py`, `last_quarterly.json`, `last_concall.json`, or other legacy application files unless explicitly requested.
 
 ## Required run audit
@@ -12,7 +12,7 @@ At the beginning of every run, record:
 - Unique run ID.
 - Target branch: `chatgpt-tracker`.
 
-At the end, audit these exact checkpoints:
+At the end, audit:
 1. Scheduler prompt execution reached.
 2. `stocks.txt` read successfully.
 3. `CHATGPT_TRACKER_STATE.json` read successfully.
@@ -23,30 +23,28 @@ At the end, audit these exact checkpoints:
 8. Report delivery status.
 9. GitHub archival/status-update status.
 
-If any required checkpoint fails, return `ERROR` with the failed step, likely reason, and whether any changes were safely persisted. Do not claim success.
+If any checkpoint fails, return `ERROR` naming the failed step, likely reason, and whether changes were safely persisted. Do not claim success.
 
 ## Required inputs
-Before research, fetch both files from **`ref=chatgpt-tracker`**:
+Before research, fetch both files explicitly with `ref=chatgpt-tracker`:
 - `stocks.txt`
 - `CHATGPT_TRACKER_STATE.json`
 
-If either file cannot be read, stop research and report the inaccessible file. Never infer or fabricate watchlist/state data.
+If either cannot be read, stop and report the inaccessible file. Never infer or fabricate watchlist/state data.
 
 ## State and deduplication
-Use `CHATGPT_TRACKER_STATE.json` as the persistent memory.
+Use `CHATGPT_TRACKER_STATE.json` as persistent memory.
 
-The canonical deduplication key is:
+Canonical key:
 
 `symbol + update_type + reporting_period_or_date`
 
 Rules:
 - Quarterly results and concall updates are independent update types.
-- Never regenerate an exact key already present in `completed_updates`.
-- A new reporting period is a new update.
-- A new actual concall/transcript is a new update even for the same quarter.
-- A material correction/restatement or meaningful new disclosure may create a new update with a distinct date/type key.
-- Deduplicate candidates before generating any report.
-- Do not mark an update complete until its report has been generated, archived, and verified.
+- Never regenerate an exact key already in `completed_updates`.
+- Deduplicate all candidates before generating reports.
+- A new reporting period, actual new call/transcript, material correction/restatement, or meaningful new disclosure may create a new key.
+- Do not mark an update complete until its report is generated, archived, and verified.
 
 ## Research and evidence
 Research the current watchlist for genuinely new or materially changed:
@@ -55,21 +53,21 @@ Research the current watchlist for genuinely new or materially changed:
 - Actual earnings/conference-call transcripts or recordings.
 - Official company and stock-exchange disclosures.
 
-Prefer primary sources. Separate reported facts from interpretation. Do not invent unavailable figures, commentary, guidance, dates, or source links.
+Prefer primary sources. Separate reported facts from interpretation. Every displayed number must be traceable to current evidence. Do not use hard-coded figures or prior-run report content as evidence.
 
 ### Consolidated-first rule
 For quarterly financials:
 1. Find and evaluate consolidated results first.
 2. Use consolidated figures whenever available.
-3. Use standalone figures only if consolidated results are unavailable.
+3. Use standalone figures only when consolidated results are unavailable.
 4. Never substitute standalone figures when consolidated results exist.
 
-A quarterly result must not be classified as a concall update unless an actual concall, earnings-call transcript, recording, or management-call source is available.
+A quarterly result is not a concall update unless an actual concall, earnings-call transcript, recording, or management-call source is available.
 
 ## Report generation
 For each genuinely new material update, generate a professional, phone-readable PNG card in the established Concall Tracker style.
 
-Quarterly card must contain:
+Quarterly card:
 1. Company and quarter.
 2. KPI strip.
 3. Current / previous-quarter / year-ago financial comparison where available.
@@ -80,7 +78,7 @@ Quarterly card must contain:
 8. Investor takeaway.
 9. Primary-source verification note.
 
-Concall card must contain:
+Concall card:
 1. Company, quarter, and call date.
 2. Headline management message.
 3. Management takeaways.
@@ -93,7 +91,29 @@ Concall card must contain:
 10. Investor takeaway.
 11. Primary-source verification note.
 
-Do not use hard-coded or previously generated figures as evidence for a new run. Every displayed number must be traceable to the current research evidence.
+## GitHub binary archival — mandatory implementation
+GitHub's UTF-8 Contents API is not suitable for PNG/PDF uploads. Binary reports must be archived through the Git Database API using a real base64 payload.
+
+Use this exact sequence on `chatgpt-tracker`:
+
+1. Read the current `chatgpt-tracker` branch ref and obtain its current commit SHA.
+2. Generate the report locally and confirm the file exists and is non-empty.
+3. Read the actual file bytes and base64-encode them. Do not base64-encode a filesystem path, JSON wrapper, or Markdown link.
+4. Call `create_blob` with `encoding: "base64"` and `content: <complete base64 of the actual PNG/PDF bytes>`.
+5. Collect the returned blob SHA.
+6. Create a Git tree based on the current commit's tree, with an entry containing `path`, `mode: "100644"`, `type: "blob"`, and the returned blob SHA.
+7. Create a commit with `create_commit`, using the current branch commit as the parent.
+8. Move only `refs/heads/chatgpt-tracker` with `update_ref` to the new commit SHA. Never update `main`.
+9. Verify archival by fetching the exact path with `ref=chatgpt-tracker`, or by fetching the committed blob and confirming its SHA/content. A successful `create_blob` alone is not archival.
+10. Only after every report is verified on the branch, update `CHATGPT_TRACKER_STATE.json` sequentially using its current SHA.
+11. Finally write `run_status/YYYY-MM-DD.json` on `chatgpt-tracker`, then verify that status-file commit/path exists.
+
+### Binary archival failure handling
+- If any Git Database API step is unavailable, fails, or cannot be verified, do not update tracker state.
+- Do not claim the report was archived or committed.
+- Return `ERROR` with the exact failed step and whether any earlier changes were safely persisted.
+- Do not fall back to `update_file` for binary files; it is a UTF-8 text-file operation.
+- Never claim a local sandbox path is a GitHub archive.
 
 ## Delivery contract
 - 1 new update: deliver only its PNG card.
@@ -102,22 +122,11 @@ Do not use hard-coded or previously generated figures as evidence for a new run.
 - 0 new updates: reply exactly `No new material updates.` and generate no report file.
 - If any workflow step fails, return a concise error instead of claiming a report was delivered.
 
-## GitHub persistence
-If GitHub write tools are available:
-1. Save actual generated PNGs under `reports/YYYY/MM/DD/` on `chatgpt-tracker`.
-2. If there are more than two updates, save the actual combined PDF under the same date directory.
-3. Verify each saved report exists on `chatgpt-tracker` before changing state.
-4. Update `CHATGPT_TRACKER_STATE.json` only after successful report generation, archival, and verification.
-5. Write `run_status/YYYY-MM-DD.json` as the final step, containing factual run timestamp, run ID, status (`success`, `no_updates`, or `error`), counts, report paths, checkpoint results, and error details.
-6. Verify the status-file commit before claiming it was written.
-
-If binary upload or state writing is unavailable, clearly report that limitation. Do not claim archival, state persistence, or status-file creation. Never modify `main`.
-
 ## Final quality-control gate
 Before responding, verify:
 - Delivered report count equals new-update count, subject to the PDF delivery rule.
 - Every report corresponds to a genuinely new, deduplicated update.
 - Consolidated-first selection was followed.
-- State was updated only after successful report generation and archival.
+- State was updated only after successful report generation, archival, and verification.
 - No forbidden branch or legacy file was touched.
 - The final response follows the delivery contract exactly.
