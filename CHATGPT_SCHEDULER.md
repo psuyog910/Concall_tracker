@@ -64,10 +64,10 @@ For quarterly financials:
 
 A quarterly result is not a concall update unless an actual concall, earnings-call transcript, recording, or management-call source is available.
 
-## Report generation
-For each genuinely new material update, generate a professional, phone-readable PNG card in the established Concall Tracker style.
+## Report generation and delivery — PDF always
+For each genuinely new material update, create a professional, phone-readable report card as one page of a PDF. The PDF is the only delivered report format whenever there is at least one new update.
 
-Quarterly card:
+Quarterly page:
 1. Company and quarter.
 2. KPI strip.
 3. Current / previous-quarter / year-ago financial comparison where available.
@@ -78,7 +78,7 @@ Quarterly card:
 8. Investor takeaway.
 9. Primary-source verification note.
 
-Concall card:
+Concall page:
 1. Company, quarter, and call date.
 2. Headline management message.
 3. Management takeaways.
@@ -91,21 +91,30 @@ Concall card:
 10. Investor takeaway.
 11. Primary-source verification note.
 
+PDF rules:
+- 1 new update: generate and deliver one phone-optimized PDF with one page.
+- 2 new updates: generate and deliver one phone-optimized PDF with two pages.
+- More than 2 new updates: generate and deliver one phone-optimized PDF with one page per update.
+- Do not deliver individual PNGs, separate cards, ZIP files, or a prose digest.
+- PNGs may be used as intermediate artwork, but they are not the delivery artifact.
+- 0 new updates: reply exactly `No new material updates.` and generate no report file.
+- If any workflow step fails, return a concise error instead of claiming a report was delivered.
+
 ## GitHub binary archival — mandatory implementation
 GitHub's UTF-8 Contents API is not suitable for PNG/PDF uploads. Binary reports must be archived through the Git Database API using a real base64 payload.
 
 Use this exact sequence on `chatgpt-tracker`:
 
 1. Read the current `chatgpt-tracker` branch ref and obtain its current commit SHA.
-2. Generate the report locally and confirm the file exists and is non-empty.
-3. Read the actual file bytes and base64-encode them. Do not base64-encode a filesystem path, JSON wrapper, or Markdown link.
-4. Call `create_blob` with `encoding: "base64"` and `content: <complete base64 of the actual PNG/PDF bytes>`.
+2. Generate the final PDF locally and confirm the file exists, is non-empty, and has the expected page count.
+3. Read the actual PDF bytes and base64-encode them. Do not base64-encode a filesystem path, JSON wrapper, or Markdown link.
+4. Call `create_blob` with `encoding: "base64"` and `content: <complete base64 of the actual PDF bytes>`.
 5. Collect the returned blob SHA.
 6. Create a Git tree based on the current commit's tree, with an entry containing `path`, `mode: "100644"`, `type: "blob"`, and the returned blob SHA.
 7. Create a commit with `create_commit`, using the current branch commit as the parent.
 8. Move only `refs/heads/chatgpt-tracker` with `update_ref` to the new commit SHA. Never update `main`.
 9. Verify archival by fetching the exact path with `ref=chatgpt-tracker`, or by fetching the committed blob and confirming its SHA/content. A successful `create_blob` alone is not archival.
-10. Only after every report is verified on the branch, update `CHATGPT_TRACKER_STATE.json` sequentially using its current SHA.
+10. Only after the PDF is verified on the branch, update `CHATGPT_TRACKER_STATE.json` sequentially using its current SHA.
 11. Finally write `run_status/YYYY-MM-DD.json` on `chatgpt-tracker`, then verify that status-file commit/path exists.
 
 ### Binary archival failure handling
@@ -115,18 +124,11 @@ Use this exact sequence on `chatgpt-tracker`:
 - Do not fall back to `update_file` for binary files; it is a UTF-8 text-file operation.
 - Never claim a local sandbox path is a GitHub archive.
 
-## Delivery contract
-- 1 new update: deliver only its PNG card.
-- 2 new updates: deliver only the two PNG cards.
-- More than 2 new updates: deliver only one phone-optimized PDF with one page per new card. Do not deliver individual cards, ZIP files, or a prose digest.
-- 0 new updates: reply exactly `No new material updates.` and generate no report file.
-- If any workflow step fails, return a concise error instead of claiming a report was delivered.
-
 ## Final quality-control gate
 Before responding, verify:
-- Delivered report count equals new-update count, subject to the PDF delivery rule.
-- Every report corresponds to a genuinely new, deduplicated update.
+- The delivered PDF page count equals the number of new material updates.
+- Every page corresponds to a genuinely new, deduplicated update.
 - Consolidated-first selection was followed.
-- State was updated only after successful report generation, archival, and verification.
+- State was updated only after successful PDF generation, archival, and verification.
 - No forbidden branch or legacy file was touched.
-- The final response follows the delivery contract exactly.
+- The final response follows the PDF-only delivery contract exactly.
