@@ -1,0 +1,28 @@
+{
+  "run_id": "20260927T085727+0530-concall-004",
+  "run_timestamp": "2026-09-27T08:57:27+05:30",
+  "status": "error",
+  "counts": {
+    "new_material_updates": 1,
+    "reports_generated": 1,
+    "reports_archived": 0,
+    "state_updates_persisted": 0
+  },
+  "report_paths": [
+    "local:/mnt/data/moldtkpac_2026-09-27.png"
+  ],
+  "github_branch": "chatgpt-tracker",
+  "error": "PNG report was generated, but GitHub binary blob upload was blocked by the runtime safety layer; therefore report archival could not be verified and CHATGPT_TRACKER_STATE.json was intentionally not updated.",
+  "audit": {
+    "prompt_reached": true,
+    "stocks_txt_read": true,
+    "state_read": true,
+    "research_attempted": true,
+    "consolidated_first_applied": true,
+    "deduplication_applied": true,
+    "report_generation": "success",
+    "report_delivery": "local file generated; delivery contract aborted because archival step failed",
+    "github_archival": "failed",
+    "state_update": "not attempted after archival failure"
+  }
+}
